@@ -13,7 +13,7 @@
 		});
 	};
 
-	setupConvex(CONVEX_URL);
+	setupConvex(CONVEX_URL ?? '');
 
 	const convex = useConvexClient();
 

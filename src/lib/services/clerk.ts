@@ -1,5 +1,5 @@
-import { CLERK_SECRET_KEY } from '$env/static/private';
-import { PUBLIC_CLERK_PUBLISHABLE_KEY } from '$env/static/public';
+import { env as privateEnv } from '$env/dynamic/private';
+import { env as publicEnv } from '$env/dynamic/public';
 import { createClerkClient, type User } from '@clerk/backend';
 import type { RequestEvent } from '@sveltejs/kit';
 import { Data, Effect, Layer, ServiceMap } from 'effect';
@@ -19,8 +19,8 @@ interface ClerkDef {
 export class ClerkService extends ServiceMap.Service<ClerkService, ClerkDef>()('ClerkService') {
 	static readonly layer = Layer.sync(ClerkService, () => {
 		const clerk = createClerkClient({
-			secretKey: CLERK_SECRET_KEY,
-			publishableKey: PUBLIC_CLERK_PUBLISHABLE_KEY
+			secretKey: privateEnv.CLERK_SECRET_KEY ?? '',
+			publishableKey: publicEnv.PUBLIC_CLERK_PUBLISHABLE_KEY ?? ''
 		});
 
 		const validateAuth = (event: RequestEvent) =>

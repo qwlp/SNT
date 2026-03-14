@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { CONVEX_API_KEY } from '$env/static/private';
+import { env } from '$env/dynamic/private';
 import { ConvexHttpClient } from 'convex/browser';
 import { Data, Layer, ServiceMap } from 'effect';
 import * as Effect from 'effect/Effect';
@@ -60,10 +60,10 @@ export class ConvexPrivateService extends ServiceMap.Service<ConvexPrivateServic
 	'ConvexPrivateService'
 ) {
 	static readonly layer = Layer.sync(ConvexPrivateService, () => {
-		const convex = new ConvexHttpClient(CONVEX_URL);
+		const convex = new ConvexHttpClient(CONVEX_URL ?? '');
 
 		const withApiKey = <Args extends DefaultFunctionArgs>(args: Omit<Args, 'apiKey'>) =>
-			({ ...args, apiKey: CONVEX_API_KEY }) as unknown as Args;
+			({ ...args, apiKey: env.CONVEX_API_KEY ?? '' }) as unknown as Args;
 
 		const createConvexError = <
 			Type extends 'query' | 'mutation' | 'action',

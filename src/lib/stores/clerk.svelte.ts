@@ -1,5 +1,5 @@
 import { Clerk } from '@clerk/clerk-js';
-import { PUBLIC_CLERK_PUBLISHABLE_KEY } from '$env/static/public';
+import { env } from '$env/dynamic/public';
 import { createContext, onMount } from 'svelte';
 import { ui } from '@clerk/ui';
 
@@ -9,14 +9,27 @@ type EmittedOrganization = NonNullable<
 type EmittedUser = NonNullable<Parameters<Parameters<Clerk['addListener']>[0]>[0]['user']>;
 type EmittedSession = NonNullable<Parameters<Parameters<Clerk['addListener']>[0]>[0]['session']>;
 
+const resolveClerkPublishableKey = () =>
+	env.PUBLIC_CLERK_PUBLISHABLE_KEY ??
+	(
+		globalThis as typeof globalThis & {
+			__sveltekit_dev?: { env?: Record<string, string> };
+		}
+	).__sveltekit_dev?.env?.PUBLIC_CLERK_PUBLISHABLE_KEY ??
+	import.meta.env.PUBLIC_CLERK_PUBLISHABLE_KEY ??
+	import.meta.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY ??
+	'';
+
 class ClerkStore {
 	isClerkLoaded = $state(false);
-	clerk = new Clerk(PUBLIC_CLERK_PUBLISHABLE_KEY);
+	clerk: Clerk;
 	currentOrganization = $state<EmittedOrganization | null>(null);
 	currentSession = $state<EmittedSession | null>(null);
 	currentUser = $state<EmittedUser | null>(null);
 
 	constructor() {
+		this.clerk = new Clerk(resolveClerkPublishableKey());
+
 		$effect(() => {
 			const cleanup = this.clerk.addListener((emission) => {
 				if (emission.organization) {

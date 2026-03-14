@@ -6,7 +6,7 @@
 </script>
 
 <svelte:head>
-	<title>Conference Tracker</title>
+	<title>SNT App</title>
 </svelte:head>
 
 <ClerkWrapper>

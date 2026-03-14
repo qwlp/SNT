@@ -1,2 +1,65 @@
 @import 'tailwindcss';
 @plugin '@tailwindcss/typography';
+
+:root {
+	--canvas: #f3efe7;
+	--surface: #fffdf8;
+	--surface-muted: #ece4d6;
+	--surface-strong: #ddd0bc;
+	--border: #d4c7b2;
+	--border-strong: #b49e80;
+	--text: #241f17;
+	--muted: #62584a;
+	--primary: #6e5031;
+	--primary-soft: #ecdecb;
+	--accent: #335a4f;
+	--accent-soft: #d8e4de;
+	--danger: #9f4f3e;
+	--danger-soft: #f1ddd8;
+	--map-bg: #232821;
+	--map-border: #3e463d;
+	--map-text: #edf1ea;
+}
+
+@layer base {
+	html {
+		background: var(--canvas);
+		color: var(--text);
+		font-family: 'Helvetica Neue', 'Noto Sans Khmer', 'Noto Sans', sans-serif;
+	}
+
+	body {
+		min-height: 100vh;
+		background: var(--canvas);
+		color: var(--text);
+	}
+
+	h1,
+	h2,
+	h3,
+	h4 {
+		letter-spacing: -0.02em;
+	}
+
+	a,
+	button,
+	input,
+	select,
+	textarea {
+		transition:
+			color 150ms ease,
+			background-color 150ms ease,
+			border-color 150ms ease,
+			box-shadow 150ms ease,
+			opacity 150ms ease;
+	}
+
+	button:not(:disabled) {
+		cursor: pointer;
+	}
+
+	::selection {
+		background: var(--surface-strong);
+		color: var(--text);
+	}
+}
