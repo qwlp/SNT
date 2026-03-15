@@ -74,15 +74,7 @@
 		<div
 			class="mx-auto max-w-md border border-black/8 bg-white p-6 text-[var(--text)] shadow-[0_20px_48px_rgba(17,17,17,0.06)]"
 		>
-			<p class="text-xs font-semibold tracking-[0.24em] text-[#7a7a7a] uppercase">Proof</p>
-			<h1 class="mt-3 text-3xl font-semibold tracking-[-0.03em] text-[#111111]">
-				Sign in for proof
-			</h1>
-			<p class="mt-3 text-sm leading-6 text-[#5f5f5f]">
-				Access tracked trips and generate delay certificates from completed sessions.
-			</p>
 			<div
-				class="mt-5"
 				{@attach (element) => {
 					clerkContext.clerk.mountSignIn(element, {
 						appearance: minimalClerkAppearance

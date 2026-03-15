@@ -787,79 +787,18 @@
 </script>
 
 {#if !isSignedIn}
-	<div class="min-h-[100svh] bg-[#f7f7f4] text-[#111111]">
-		<div class="mx-auto flex min-h-[100svh] max-w-6xl items-center px-4 py-8 sm:px-6 lg:px-8">
-			<div class="grid w-full gap-4 lg:grid-cols-[minmax(0,1.1fr)_420px] lg:gap-6">
-				<section class="order-2 border border-black/8 bg-white p-6 sm:p-8 lg:order-1 lg:p-10">
-					<div class="flex items-center justify-between gap-4 border-b border-black/8 pb-5">
-						<div>
-							<p class="text-xs font-semibold tracking-[0.26em] text-[#7a7a7a] uppercase">
-								SNT Live
-							</p>
-							<p class="mt-2 text-sm text-[#5f5f5f]">Phnom Penh commuter pilot</p>
-						</div>
-						<a
-							href={resolve('/')}
-							class="inline-flex h-10 items-center border border-black/10 px-4 text-sm font-medium text-[#111111] hover:bg-black/[0.02]"
-						>
-							Learn more
-						</a>
-					</div>
-
-					<div class="mt-8 max-w-2xl">
-						<h1 class="text-4xl font-semibold tracking-[-0.04em] text-[#111111] sm:text-5xl">
-							Traffic tools on one map.
-						</h1>
-						<p class="mt-4 max-w-xl text-base leading-7 text-[#5f5f5f]">
-							Sign in to report incidents, compare route options, track live trips, and request
-							delay proof from recorded journeys.
-						</p>
-					</div>
-
-					<div class="mt-10 grid gap-3 sm:grid-cols-3">
-						<div class="border border-black/8 bg-[#fcfcfa] p-4">
-							<p class="text-sm font-medium text-[#111111]">Live reports</p>
-							<p class="mt-2 text-sm leading-6 text-[#5f5f5f]">
-								Pin floods, closures, and checkpoints from the map.
-							</p>
-						</div>
-						<div class="border border-black/8 bg-[#fcfcfa] p-4">
-							<p class="text-sm font-medium text-[#111111]">Route planning</p>
-							<p class="mt-2 text-sm leading-6 text-[#5f5f5f]">
-								Compare nearby options before you commit to a trip.
-							</p>
-						</div>
-						<div class="border border-black/8 bg-[#fcfcfa] p-4">
-							<p class="text-sm font-medium text-[#111111]">Delay proof</p>
-							<p class="mt-2 text-sm leading-6 text-[#5f5f5f]">
-								Issue certificates only after a tracked journey is complete.
-							</p>
-						</div>
-					</div>
-				</section>
-
-				<section
-					class="order-1 border border-black/8 bg-white p-6 shadow-[0_24px_64px_rgba(17,17,17,0.06)] sm:p-8 lg:order-2"
-				>
-					<div class="border-b border-black/8 pb-5">
-						<p class="text-xs font-semibold tracking-[0.24em] text-[#7a7a7a] uppercase">Access</p>
-						<h2 class="mt-3 text-3xl font-semibold tracking-[-0.03em] text-[#111111]">
-							Sign in to SNT
-						</h2>
-						<p class="mt-3 text-sm leading-6 text-[#5f5f5f]">
-							Use your Google account or email to continue into the app.
-						</p>
-					</div>
-
-					<div
-						class="mt-6"
-						{@attach (element) => {
-							clerkContext.clerk.mountSignIn(element, {
-								appearance: minimalClerkAppearance
-							});
-						}}
-					></div>
-				</section>
+	<div class="min-h-[100svh] bg-[#f7f7f4]">
+		<div class="mx-auto flex min-h-[100svh] max-w-md items-center justify-center px-4 py-8 sm:px-6">
+			<div
+				class="w-full border border-black/8 bg-white p-6 shadow-[0_24px_64px_rgba(17,17,17,0.06)] sm:p-8"
+			>
+				<div
+					{@attach (element) => {
+						clerkContext.clerk.mountSignIn(element, {
+							appearance: minimalClerkAppearance
+						});
+					}}
+				></div>
 			</div>
 		</div>
 	</div>
