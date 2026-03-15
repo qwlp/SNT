@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
+	import { minimalClerkAppearance } from '$lib/auth/clerkAppearance';
 	import AppNavigation from '$lib/components/AppNavigation.svelte';
 	import { getClerkContext } from '$lib/stores/clerk.svelte';
 	import { trafficDashboard, requestProof } from '$lib/remote/traffic.remote';
@@ -71,29 +72,21 @@
 {#if !clerkContext.clerk.user}
 	<div class="min-h-screen bg-[var(--canvas)] px-4 py-8 sm:px-6 lg:px-8">
 		<div
-			class="mx-auto max-w-md border border-[var(--border)] bg-[var(--surface)] p-6 text-[var(--text)]"
+			class="mx-auto max-w-md border border-black/8 bg-white p-6 text-[var(--text)] shadow-[0_20px_48px_rgba(17,17,17,0.06)]"
 		>
-			<div
-				class="flex h-12 w-12 items-center justify-center border border-[var(--primary)] bg-[var(--primary)] text-white"
-			>
-				<svg
-					viewBox="0 0 24 24"
-					class="h-6 w-6"
-					fill="none"
-					stroke="currentColor"
-					stroke-width="2"
-					stroke-linecap="round"
-					stroke-linejoin="round"
-				>
-					<path d="M7 4.5h7l3 3V19a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6.5a2 2 0 0 1 2-2Z" />
-					<path d="M14 4.5V8h3" />
-				</svg>
-			</div>
-			<h1 class="mt-4 text-2xl font-semibold">Sign in for proof</h1>
+			<p class="text-xs font-semibold tracking-[0.24em] text-[#7a7a7a] uppercase">Proof</p>
+			<h1 class="mt-3 text-3xl font-semibold tracking-[-0.03em] text-[#111111]">
+				Sign in for proof
+			</h1>
+			<p class="mt-3 text-sm leading-6 text-[#5f5f5f]">
+				Access tracked trips and generate delay certificates from completed sessions.
+			</p>
 			<div
 				class="mt-5"
 				{@attach (element) => {
-					clerkContext.clerk.mountSignIn(element, {});
+					clerkContext.clerk.mountSignIn(element, {
+						appearance: minimalClerkAppearance
+					});
 				}}
 			></div>
 		</div>
