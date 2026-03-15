@@ -65,6 +65,21 @@ export class ConvexPrivateService extends ServiceMap.Service<ConvexPrivateServic
 		const withApiKey = <Args extends DefaultFunctionArgs>(args: Omit<Args, 'apiKey'>) =>
 			({ ...args, apiKey: env.CONVEX_API_KEY ?? '' }) as unknown as Args;
 
+		const getConvexHint = (message: string) => {
+			if (message.includes('Could not find public function')) {
+				return (
+					"Convex is pointing at a deployment that does not have this repo's functions. " +
+					'Run the app against the local Convex backend in development or deploy the backend before using the hosted URL.'
+				);
+			}
+
+			if (message.includes('Invalid API key')) {
+				return 'CONVEX_API_KEY does not match the backend helper guard.';
+			}
+
+			return null;
+		};
+
 		const createConvexError = <
 			Type extends 'query' | 'mutation' | 'action',
 			Args extends DefaultFunctionArgs,
@@ -79,16 +94,21 @@ export class ConvexPrivateService extends ServiceMap.Service<ConvexPrivateServic
 			func: FunctionReference<Type, 'public', Args, Result, ComponentPath>;
 			error: unknown;
 		}) =>
-			new ConvexError({
-				message: error instanceof Error ? error.message : String(error),
-				kind: `convex_${operation}_error`,
-				traceId: randomUUID(),
-				timestamp: Date.now(),
-				operation,
-				functionName: getFunctionName(func),
-				componentPath: func._componentPath,
-				cause: error
-			});
+			(() => {
+				const baseMessage = error instanceof Error ? error.message : String(error);
+				const hint = getConvexHint(baseMessage);
+
+				return new ConvexError({
+					message: hint === null ? baseMessage : `${baseMessage} ${hint}`,
+					kind: `convex_${operation}_error`,
+					traceId: randomUUID(),
+					timestamp: Date.now(),
+					operation,
+					functionName: getFunctionName(func),
+					componentPath: func._componentPath,
+					cause: error
+				});
+			})();
 
 		const query: PrivateQueryRunner = ({ func, args }) =>
 			Effect.tryPromise({

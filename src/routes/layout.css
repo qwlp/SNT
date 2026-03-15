@@ -34,6 +34,45 @@
 		color: var(--text);
 	}
 
+	body * {
+		border-radius: 0 !important;
+	}
+
+	body
+		:where(
+			div,
+			section,
+			article,
+			aside,
+			header,
+			footer,
+			nav,
+			main,
+			button,
+			a,
+			input,
+			select,
+			textarea,
+			ul,
+			ol,
+			li,
+			dl,
+			dt,
+			dd,
+			form,
+			label,
+			span,
+			p,
+			h1,
+			h2,
+			h3,
+			h4,
+			h5,
+			h6
+		):not(.mapboxgl-ctrl-icon) {
+		background-image: none !important;
+	}
+
 	h1,
 	h2,
 	h3,

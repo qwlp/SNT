@@ -5,8 +5,9 @@
 	"type": "module",
 	"scripts": {
 		"dev": "vite dev",
-		"dev:hosted": "vite dev",
+		"dev:hosted": "USE_LOCAL_CONVEX=false vite dev",
 		"dev:local": "USE_LOCAL_CONVEX=true vite dev",
+		"convex:push:dev": "convex dev --once --tail-logs disable",
 		"convex:dash": "docker run --rm -p 6791:6791 -e NEXT_PUBLIC_DEPLOYMENT_URL=http://127.0.0.1:3210 ghcr.io/get-convex/convex-dashboard:latest",
 		"convex:gen": "CONVEX_AGENT_MODE=anonymous convex codegen",
 		"build": "vite build",

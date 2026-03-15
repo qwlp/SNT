@@ -1,5 +1,6 @@
 import { v } from 'convex/values';
 import { authedMutation, authedQuery } from './helpers';
+import { findAuthedUser, getOrCreateAuthedUser } from './users';
 
 const geoPointValidator = v.object({
 	lat: v.number(),
@@ -22,10 +23,7 @@ const routeOptionValidator = v.object({
 export const listMine = authedQuery({
 	args: {},
 	handler: async (ctx) => {
-		const user = await ctx.db
-			.query('users')
-			.withIndex('by_clerk', (query) => query.eq('clerkId', ctx.identity.subject))
-			.unique();
+		const user = await findAuthedUser(ctx);
 
 		if (!user) {
 			return [];
@@ -51,14 +49,7 @@ export const createSession = authedMutation({
 		startedAt: v.number()
 	},
 	handler: async (ctx, args) => {
-		const user = await ctx.db
-			.query('users')
-			.withIndex('by_clerk', (query) => query.eq('clerkId', ctx.identity.subject))
-			.unique();
-
-		if (!user) {
-			throw new Error('User profile missing');
-		}
+		const user = await getOrCreateAuthedUser(ctx);
 
 		const activeSession = (
 			await ctx.db
@@ -97,13 +88,10 @@ export const appendSample = authedMutation({
 		recordedAt: v.number()
 	},
 	handler: async (ctx, args) => {
-		const user = await ctx.db
-			.query('users')
-			.withIndex('by_clerk', (query) => query.eq('clerkId', ctx.identity.subject))
-			.unique();
+		const user = await findAuthedUser(ctx);
 
 		if (!user) {
-			throw new Error('User profile missing');
+			throw new Error('User profile missing for this trip.');
 		}
 
 		const session = await ctx.db.get(args.routeSessionId);
@@ -134,13 +122,10 @@ export const completeSession = authedMutation({
 		recordedAt: v.number()
 	},
 	handler: async (ctx, args) => {
-		const user = await ctx.db
-			.query('users')
-			.withIndex('by_clerk', (query) => query.eq('clerkId', ctx.identity.subject))
-			.unique();
+		const user = await findAuthedUser(ctx);
 
 		if (!user) {
-			throw new Error('User profile missing');
+			throw new Error('User profile missing for this trip.');
 		}
 
 		const session = await ctx.db.get(args.routeSessionId);

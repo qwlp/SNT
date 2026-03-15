@@ -6,6 +6,7 @@ import {
 	isPointInViewport
 } from '../../lib/domain/traffic';
 import { authedMutation, authedQuery } from './helpers';
+import { findAuthedUser, getOrCreateAuthedUser } from './users';
 
 const viewportValidator = v.optional(
 	v.object({
@@ -55,12 +56,7 @@ export const create = authedMutation({
 		description: v.optional(v.string())
 	},
 	handler: async (ctx, args) => {
-		const users = (await ctx.db.query('users').collect()) as Doc<'users'>[];
-		const user = users.find((entry) => entry.clerkId === ctx.identity.subject) ?? null;
-
-		if (!user) {
-			throw new Error('User profile missing');
-		}
+		const user = await getOrCreateAuthedUser(ctx);
 
 		const now = Date.now();
 		const incidentId = await ctx.db.insert('incidents', {
@@ -93,12 +89,7 @@ export const confirm = authedMutation({
 		incidentId: v.id('incidents')
 	},
 	handler: async (ctx, args) => {
-		const users = (await ctx.db.query('users').collect()) as Doc<'users'>[];
-		const user = users.find((entry) => entry.clerkId === ctx.identity.subject) ?? null;
-
-		if (!user) {
-			throw new Error('User profile missing');
-		}
+		const user = await getOrCreateAuthedUser(ctx);
 
 		const incident = await ctx.db.get(args.incidentId);
 
@@ -171,8 +162,7 @@ export const confirm = authedMutation({
 export const listMine = authedQuery({
 	args: {},
 	handler: async (ctx) => {
-		const users = (await ctx.db.query('users').collect()) as Doc<'users'>[];
-		const user = users.find((entry) => entry.clerkId === ctx.identity.subject) ?? null;
+		const user = await findAuthedUser(ctx);
 
 		if (!user) {
 			return [];

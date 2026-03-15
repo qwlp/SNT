@@ -7,11 +7,12 @@
 	import type { TrafficLevel } from '$lib/services/route-planner';
 	import {
 		INCIDENT_LABELS,
+		INCIDENT_TYPES,
 		PHNOM_PENH_BOUNDS,
 		PHNOM_PENH_CENTER,
 		type IncidentType
 	} from '$lib/domain/traffic';
-	import { boundsFromPoints, expandBounds } from '$lib/services/geo';
+	import { boundsFromPoints, expandBounds, haversineMeters } from '$lib/services/geo';
 
 	interface IncidentMarker {
 		_id: string;
@@ -55,6 +56,7 @@
 		Point,
 		{
 			id: string;
+			type: IncidentType;
 			label: string;
 			confidencePercent: number;
 		}
@@ -80,7 +82,7 @@
 	const INACTIVE_ROUTE_LAYER_ID = 'route-inactive';
 	const TRAFFIC_LAYER_ID = 'traffic-flow';
 	const TRAFFIC_CLOSURE_LAYER_ID = 'traffic-closure';
-	const INCIDENT_LAYER_ID = 'incident-circles';
+	const INCIDENT_HALO_LAYER_ID = 'incident-halos';
 	const LOCATION_HALO_LAYER_ID = 'current-location-halo';
 	const LOCATION_CENTER_LAYER_ID = 'current-location-center';
 	const DESTINATION_HALO_LAYER_ID = 'destination-halo';
@@ -103,7 +105,7 @@
 		focusPoints = [],
 		onRouteSelect,
 		onDestinationPick,
-		navigationMode = false,
+		liveNavigation = false,
 		fullscreen = false,
 		showHeader = !fullscreen
 	} = $props<{
@@ -120,7 +122,7 @@
 		focusPoints?: GeoPoint[];
 		onRouteSelect?: (routeId: string) => void;
 		onDestinationPick?: (point: GeoPoint) => void;
-		navigationMode?: boolean;
+		liveNavigation?: boolean;
 		fullscreen?: boolean;
 		showHeader?: boolean;
 	}>();
@@ -133,6 +135,10 @@
 	let mapReady = $state(false);
 	let styleReady = false;
 	let isThreeD = $state(false);
+	let isSatellite = $state(false);
+	let showTraffic = $state(true);
+	let reloadMapStyle: (() => void) | null = null;
+	let lastNavigationBearing = $state(-18);
 
 	const mapboxToken = env.PUBLIC_MAPBOX_ACCESS_TOKEN?.trim() ?? '';
 	const hasMapboxToken = mapboxToken.length > 0;
@@ -140,9 +146,11 @@
 	const mapboxStyleUrl = mapboxStyleId.startsWith('mapbox://styles/')
 		? mapboxStyleId
 		: `mapbox://styles/${mapboxStyleId}`;
+	const mapboxSatelliteStyleUrl = 'mapbox://styles/mapbox/satellite-streets-v12';
+	const getMapStyleUrl = () => (isSatellite ? mapboxSatelliteStyleUrl : mapboxStyleUrl);
 
-	const getPitch = () => (navigationMode || !isThreeD ? 0 : 58);
-	const getBearing = () => (navigationMode || !isThreeD ? 0 : -18);
+	const getPitch = () => (liveNavigation ? 64 : !isThreeD ? 0 : 58);
+	const getBearing = () => (liveNavigation ? lastNavigationBearing : !isThreeD ? 0 : -18);
 	const getDestinationPalette = (tone: DestinationTone) =>
 		tone === 'report'
 			? {
@@ -157,6 +165,16 @@
 				};
 
 	const getIncidentLabel = (type: IncidentType) => INCIDENT_LABELS[type];
+	const getIncidentIconId = (type: IncidentType) => `incident-${type}`;
+	const getIncidentLayerId = (type: IncidentType) => `incident-icon-${type}`;
+	const incidentIconSvg: Record<IncidentType, string> = {
+		roadblock: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><circle cx="32" cy="32" r="29" fill="#ffffff"/><circle cx="32" cy="32" r="29" fill="none" stroke="#1a1a1a" stroke-width="2.5"/><path d="M32 14 48 45.5A3.5 3.5 0 0 1 44.9 50H19.1A3.5 3.5 0 0 1 16 45.5L32 14Z" fill="#FFD54A" stroke="#1a1a1a" stroke-width="3.5" stroke-linejoin="round"/><path d="M32 25v11" stroke="#1a1a1a" stroke-width="4" stroke-linecap="round"/><circle cx="32" cy="41.5" r="2.8" fill="#1a1a1a"/></svg>`,
+		vip: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><circle cx="32" cy="32" r="29" fill="#ffffff"/><circle cx="32" cy="32" r="29" fill="none" stroke="#1a1a1a" stroke-width="2.5"/><path d="m18 39 4-15 10 7 10-7 4 15H18Z" fill="#FFD451" stroke="#1a1a1a" stroke-width="3" stroke-linejoin="round"/><path d="M22 24 16 18l9 2 7-6 7 6 9-2-6 6" fill="#FFE389" stroke="#1a1a1a" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><path d="M22 45h20" stroke="#1a1a1a" stroke-width="3" stroke-linecap="round"/></svg>`,
+		wedding: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><circle cx="32" cy="32" r="29" fill="#ffffff"/><circle cx="32" cy="32" r="29" fill="none" stroke="#1a1a1a" stroke-width="2.5"/><circle cx="25" cy="36" r="8.5" fill="#FFC8DA" stroke="#1a1a1a" stroke-width="3"/><circle cx="39" cy="36" r="8.5" fill="#FFE3A6" stroke="#1a1a1a" stroke-width="3"/><path d="M32 22.5c1.5-2.9 5.7-4.6 8.8-1.8 2.7 2.4 2.5 6.4-.3 8.9L32 38l-8.5-8.4c-2.8-2.5-3-6.5-.3-8.9 3.1-2.8 7.3-1.1 8.8 1.8Z" fill="#FF6B81" stroke="#1a1a1a" stroke-width="2.6" stroke-linejoin="round"/></svg>`,
+		flood: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><circle cx="32" cy="32" r="29" fill="#ffffff"/><circle cx="32" cy="32" r="29" fill="none" stroke="#1a1a1a" stroke-width="2.5"/><path d="M32 15c6.3 7.4 12 13.7 12 19.7a12 12 0 1 1-24 0C20 28.7 25.7 22.4 32 15Z" fill="#6EC8FF" stroke="#1a1a1a" stroke-width="3.2" stroke-linejoin="round"/><path d="M17 43.5c2.5 2.1 5 2.1 7.5 0s5-2.1 7.5 0 5 2.1 7.5 0 5-2.1 7.5 0" stroke="#1a1a1a" stroke-width="3" stroke-linecap="round"/><path d="M20 50c2.5 2.1 5 2.1 7.5 0s5-2.1 7.5 0 5 2.1 7.5 0" stroke="#1a1a1a" stroke-width="3" stroke-linecap="round"/></svg>`,
+		accident: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><circle cx="32" cy="32" r="29" fill="#ffffff"/><circle cx="32" cy="32" r="29" fill="none" stroke="#1a1a1a" stroke-width="2.5"/><path d="m20 38 5-8 8-2 5 2 4 8v6H18v-3l2-3Z" fill="#FF8A3D" stroke="#1a1a1a" stroke-width="3" stroke-linejoin="round"/><path d="m33 40 5-7 8-1 4 2.5 2 6-2.5 2.5H33v-3Z" fill="#FF5D5D" stroke="#1a1a1a" stroke-width="3" stroke-linejoin="round"/><circle cx="24" cy="44" r="3" fill="#1a1a1a"/><circle cx="36" cy="44" r="3" fill="#1a1a1a"/><circle cx="42.5" cy="44" r="3" fill="#1a1a1a"/><circle cx="49" cy="44" r="3" fill="#1a1a1a"/><path d="m32 16 2.3 4.6 5.1.7-3.7 3.5.9 5-4.6-2.4-4.6 2.4.9-5-3.7-3.5 5.1-.7L32 16Z" fill="#FFE066" stroke="#1a1a1a" stroke-width="2.6" stroke-linejoin="round"/></svg>`,
+		police: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><circle cx="32" cy="32" r="29" fill="#ffffff"/><circle cx="32" cy="32" r="29" fill="none" stroke="#1a1a1a" stroke-width="2.5"/><path d="M32 15 45 20v9c0 9.2-5.3 17-13 21.8C24.3 46 19 38.2 19 29v-9l13-5Z" fill="#7AB8FF" stroke="#1a1a1a" stroke-width="3.2" stroke-linejoin="round"/><path d="M32 24.5 34 28.5l4.5.6-3.2 3.1.8 4.4-4.1-2.2-4.1 2.2.8-4.4-3.2-3.1 4.5-.6 2-4Z" fill="#FFE373" stroke="#1a1a1a" stroke-width="2.6" stroke-linejoin="round"/></svg>`
+	};
 
 	const getViewportPoints = () => {
 		if (focusPoints.length > 0) {
@@ -176,14 +194,74 @@
 
 	const buildViewportSignature = (points: GeoPoint[]) =>
 		JSON.stringify({
+			precision: liveNavigation ? 5 : 4,
 			activeRouteId,
+			liveNavigation,
 			incidentIds: (incidents ?? []).map((incident: IncidentMarker) => incident._id),
 			routeIds: (routes ?? []).map((route: RouteLine) => route.routeId),
 			destination: destination
-				? [Number(destination.lat.toFixed(4)), Number(destination.lng.toFixed(4))]
+				? [
+						Number(destination.lat.toFixed(liveNavigation ? 5 : 4)),
+						Number(destination.lng.toFixed(liveNavigation ? 5 : 4))
+					]
 				: null,
-			points: points.map((point) => [Number(point.lat.toFixed(4)), Number(point.lng.toFixed(4))])
+			points: points.map((point) => [
+				Number(point.lat.toFixed(liveNavigation ? 5 : 4)),
+				Number(point.lng.toFixed(liveNavigation ? 5 : 4))
+			])
 		});
+
+	const getActiveNavigationPath = () => {
+		if (trackedRoute && trackedRoute.length >= 2) {
+			return trackedRoute;
+		}
+
+		const activeRoute = (routes ?? []).find((route: RouteLine) => route.routeId === activeRouteId);
+		return activeRoute?.geometry ?? null;
+	};
+
+	const getHeadingBetweenPoints = (from: GeoPoint, to: GeoPoint) => {
+		const startLat = (from.lat * Math.PI) / 180;
+		const endLat = (to.lat * Math.PI) / 180;
+		const deltaLng = ((to.lng - from.lng) * Math.PI) / 180;
+
+		const y = Math.sin(deltaLng) * Math.cos(endLat);
+		const x =
+			Math.cos(startLat) * Math.sin(endLat) -
+			Math.sin(startLat) * Math.cos(endLat) * Math.cos(deltaLng);
+
+		return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+	};
+
+	const getNavigationLookAheadPoint = (
+		location: GeoPoint,
+		path: GeoPoint[] | null,
+		fallbackDestination: GeoPoint | null | undefined
+	) => {
+		if (!path || path.length === 0) {
+			return fallbackDestination ?? null;
+		}
+
+		let nearestIndex = 0;
+		let nearestDistance = Number.POSITIVE_INFINITY;
+
+		for (const [index, point] of path.entries()) {
+			const distance = haversineMeters(location, point);
+			if (distance < nearestDistance) {
+				nearestDistance = distance;
+				nearestIndex = index;
+			}
+		}
+
+		for (let index = nearestIndex + 1; index < path.length; index += 1) {
+			const point = path[index];
+			if (point && haversineMeters(location, point) >= 40) {
+				return point;
+			}
+		}
+
+		return path[Math.min(path.length - 1, nearestIndex + 1)] ?? fallbackDestination ?? null;
+	};
 
 	const createRouteFeatureCollection = (
 		nextRoutes: RouteLine[],
@@ -250,12 +328,41 @@
 				},
 				properties: {
 					id: incident._id,
+					type: incident.type,
 					label: getIncidentLabel(incident.type).en,
 					confidencePercent: Math.round(incident.confidenceScore * 100)
 				}
 			})
 		)
 	});
+
+	const svgToDataUrl = (svg: string) =>
+		`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+
+	const loadMapImage = (src: string) =>
+		new Promise<HTMLImageElement>((resolve, reject) => {
+			const image = new Image();
+			image.onload = () => resolve(image);
+			image.onerror = () => reject(new Error(`Unable to load map image: ${src}`));
+			image.src = src;
+		});
+
+	const ensureIncidentImages = async () => {
+		if (!map) return;
+
+		await Promise.all(
+			INCIDENT_TYPES.map(async (type) => {
+				const imageId = getIncidentIconId(type);
+				if (!map || map.hasImage(imageId)) return;
+
+				const image = await loadMapImage(svgToDataUrl(incidentIconSvg[type]));
+				if (!map || map.hasImage(imageId)) return;
+				map.addImage(imageId, image, {
+					pixelRatio: 2
+				});
+			})
+		);
+	};
 
 	const createTrackedRouteFeatureCollection = (
 		nextTrackedRoute: GeoPoint[] | null | undefined
@@ -360,6 +467,35 @@
 		if (viewportSignature === nextSignature) return;
 		viewportSignature = nextSignature;
 
+		if (liveNavigation && currentLocation) {
+			const navigationPath = getActiveNavigationPath();
+			const lookAheadPoint = getNavigationLookAheadPoint(
+				currentLocation,
+				navigationPath,
+				destination
+			);
+
+			if (lookAheadPoint) {
+				lastNavigationBearing = getHeadingBetweenPoints(currentLocation, lookAheadPoint);
+			}
+
+			map.easeTo({
+				center: [currentLocation.lng, currentLocation.lat],
+				zoom: 17.1,
+				pitch: getPitch(),
+				bearing: getBearing(),
+				padding: {
+					top: 120,
+					right: 64,
+					bottom: 240,
+					left: 64
+				},
+				duration: 900,
+				essential: true
+			});
+			return;
+		}
+
 		if (points.length === 0) {
 			const defaultBounds: MapboxBounds = [
 				[PHNOM_PENH_BOUNDS.west, PHNOM_PENH_BOUNDS.south],
@@ -381,8 +517,8 @@
 			map.easeTo({
 				center: [center.lng, center.lat],
 				zoom: 14.5,
-				pitch: navigationMode ? 0 : isThreeD ? 60 : 0,
-				bearing: navigationMode ? 0 : isThreeD ? -20 : 0,
+				pitch: getPitch(),
+				bearing: getBearing(),
 				duration: 900
 			});
 			return;
@@ -409,7 +545,7 @@
 
 		if (map.getSource(TERRAIN_SOURCE_ID)) {
 			map.setTerrain(
-				isThreeD
+				isThreeD || liveNavigation
 					? {
 							source: TERRAIN_SOURCE_ID,
 							exaggeration: 1.18
@@ -420,17 +556,26 @@
 
 		if (shouldAnimate) {
 			map.easeTo({
-				pitch: navigationMode ? 0 : isThreeD ? 60 : 0,
-				bearing: navigationMode ? 0 : isThreeD ? -20 : 0,
+				pitch: getPitch(),
+				bearing: getBearing(),
 				duration: 800
 			});
 			return;
 		}
 
 		map.jumpTo({
-			pitch: navigationMode ? 0 : isThreeD ? 60 : 0,
-			bearing: navigationMode ? 0 : isThreeD ? -20 : 0
+			pitch: getPitch(),
+			bearing: getBearing()
 		});
+	};
+
+	const applyTrafficVisibility = () => {
+		if (!map || !styleReady) return;
+
+		for (const layerId of [TRAFFIC_LAYER_ID, TRAFFIC_CLOSURE_LAYER_ID]) {
+			if (!map.getLayer(layerId)) continue;
+			map.setLayoutProperty(layerId, 'visibility', showTraffic ? 'visible' : 'none');
+		}
 	};
 
 	const findLabelLayerId = () => {
@@ -441,8 +586,10 @@
 			.layers?.find((layer) => layer.type === 'symbol' && layer.layout?.['text-field'])?.id;
 	};
 
-	const installMapLayers = () => {
+	const installMapLayers = async () => {
 		if (!map) return;
+
+		await ensureIncidentImages();
 
 		if (!map.getSource(ROUTE_SOURCE_ID)) {
 			map.addSource(ROUTE_SOURCE_ID, {
@@ -647,17 +794,35 @@
 			});
 		}
 
-		if (!map.getLayer(INCIDENT_LAYER_ID)) {
+		if (!map.getLayer(INCIDENT_HALO_LAYER_ID)) {
 			map.addLayer({
-				id: INCIDENT_LAYER_ID,
+				id: INCIDENT_HALO_LAYER_ID,
 				type: 'circle',
 				source: INCIDENT_SOURCE_ID,
 				paint: {
-					'circle-radius': 8,
-					'circle-color': '#b86042',
-					'circle-stroke-color': '#fff7ef',
-					'circle-stroke-width': 2,
-					'circle-opacity': 0.95
+					'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, 12, 14, 16],
+					'circle-color': '#ffffff',
+					'circle-opacity': 0.94,
+					'circle-stroke-color': '#d7dde8',
+					'circle-stroke-width': 1.5
+				}
+			});
+		}
+
+		for (const type of INCIDENT_TYPES) {
+			const layerId = getIncidentLayerId(type);
+			if (map.getLayer(layerId)) continue;
+
+			map.addLayer({
+				id: layerId,
+				type: 'symbol',
+				source: INCIDENT_SOURCE_ID,
+				filter: ['==', ['get', 'type'], type],
+				layout: {
+					'icon-image': getIncidentIconId(type),
+					'icon-size': ['interpolate', ['linear'], ['zoom'], 10, 0.52, 14, 0.72],
+					'icon-allow-overlap': true,
+					'icon-ignore-placement': true
 				}
 			});
 		}
@@ -755,6 +920,7 @@
 			'horizon-blend': 0.15
 		});
 
+		applyTrafficVisibility();
 		applyThreeDMode(false);
 	};
 
@@ -789,7 +955,7 @@
 		const interactiveLayerIds = [
 			ACTIVE_ROUTE_LAYER_ID,
 			INACTIVE_ROUTE_LAYER_ID,
-			INCIDENT_LAYER_ID,
+			...INCIDENT_TYPES.map(getIncidentLayerId),
 			LOCATION_CENTER_LAYER_ID,
 			DESTINATION_CENTER_LAYER_ID
 		] as const;
@@ -924,7 +1090,9 @@
 
 		map.on('click', ACTIVE_ROUTE_LAYER_ID, handleRouteClick);
 		map.on('click', INACTIVE_ROUTE_LAYER_ID, handleRouteClick);
-		map.on('click', INCIDENT_LAYER_ID, handleIncidentClick);
+		for (const type of INCIDENT_TYPES) {
+			map.on('click', getIncidentLayerId(type), handleIncidentClick);
+		}
 		map.on('click', LOCATION_CENTER_LAYER_ID, handleLocationClick);
 		map.on('click', DESTINATION_CENTER_LAYER_ID, handleDestinationClick);
 		map.on('dblclick', handleMapDoubleClick);
@@ -941,7 +1109,9 @@
 
 			map?.off('click', ACTIVE_ROUTE_LAYER_ID, handleRouteClick);
 			map?.off('click', INACTIVE_ROUTE_LAYER_ID, handleRouteClick);
-			map?.off('click', INCIDENT_LAYER_ID, handleIncidentClick);
+			for (const type of INCIDENT_TYPES) {
+				map?.off('click', getIncidentLayerId(type), handleIncidentClick);
+			}
 			map?.off('click', LOCATION_CENTER_LAYER_ID, handleLocationClick);
 			map?.off('click', DESTINATION_CENTER_LAYER_ID, handleDestinationClick);
 			map?.off('dblclick', handleMapDoubleClick);
@@ -973,7 +1143,7 @@
 	};
 
 	const toggleThreeD = () => {
-		if (navigationMode) {
+		if (liveNavigation) {
 			return;
 		}
 
@@ -982,13 +1152,27 @@
 		syncViewport();
 	};
 
+	const toggleSatellite = () => {
+		if (!mapReady) {
+			return;
+		}
+
+		isSatellite = !isSatellite;
+		reloadMapStyle?.();
+	};
+
+	const toggleTraffic = () => {
+		showTraffic = !showTraffic;
+		applyTrafficVisibility();
+	};
+
 	onMount(() => {
 		if (!hasMapboxToken || !mapHost) return;
 
 		let cancelled = false;
 		let removeInteractionHandlers = () => {};
 
-		isThreeD = !navigationMode;
+		isThreeD = !liveNavigation;
 
 		const initMap = async () => {
 			const mapboxImport = await import('mapbox-gl');
@@ -999,11 +1183,11 @@
 
 			map = new mapbox.Map({
 				container: mapHost,
-				style: mapboxStyleUrl,
+				style: getMapStyleUrl(),
 				center: [PHNOM_PENH_CENTER.lng, PHNOM_PENH_CENTER.lat],
 				zoom: 12.2,
-				pitch: navigationMode ? 0 : 60,
-				bearing: navigationMode ? 0 : -20,
+				pitch: getPitch(),
+				bearing: getBearing(),
 				attributionControl: false,
 				antialias: true
 			});
@@ -1015,37 +1199,45 @@
 				maxWidth: '240px'
 			});
 
-			map.addControl(
-				new mapbox.NavigationControl({
-					showCompass: true,
-					showZoom: true,
-					visualizePitch: true
-				}),
-				'bottom-right'
-			);
-			map.addControl(new mapbox.FullscreenControl(), 'top-right');
 			map.addControl(new mapbox.ScaleControl({ unit: 'metric' }), 'bottom-left');
 
 			map.dragRotate.enable();
 			map.touchZoomRotate.enableRotation();
 			map.doubleClickZoom.disable();
 
-			map.on('load', () => {
+			const handleStyleLoad = () => {
 				if (!map || cancelled) return;
 
 				styleReady = true;
-				installMapLayers();
-				removeInteractionHandlers = installInteractionHandlers();
-				syncMapState(
-					currentLocation,
-					incidents ?? [],
-					routes ?? [],
-					trackedRoute,
-					destination,
-					activeRouteId
-				);
-				mapReady = true;
-			});
+				void installMapLayers().then(() => {
+					if (!map || cancelled) return;
+
+					removeInteractionHandlers();
+					removeInteractionHandlers = installInteractionHandlers();
+					syncMapState(
+						currentLocation,
+						incidents ?? [],
+						routes ?? [],
+						trackedRoute,
+						destination,
+						activeRouteId
+					);
+					mapReady = true;
+				});
+			};
+
+			map.on('style.load', handleStyleLoad);
+
+			reloadMapStyle = () => {
+				if (!map) return;
+
+				mapReady = false;
+				styleReady = false;
+				viewportSignature = '';
+				popup?.remove();
+				removeInteractionHandlers();
+				map.setStyle(getMapStyleUrl());
+			};
 		};
 
 		void initMap();
@@ -1055,6 +1247,7 @@
 			removeInteractionHandlers();
 			popup?.remove();
 			popup = null;
+			reloadMapStyle = null;
 			map?.remove();
 			map = null;
 			mapReady = false;
@@ -1127,11 +1320,15 @@
 	});
 
 	$effect(() => {
-		if (!navigationMode) return;
+		if (!liveNavigation) return;
 
-		isThreeD = false;
+		isThreeD = true;
 		applyThreeDMode(false);
 		syncViewport();
+	});
+
+	$effect(() => {
+		applyTrafficVisibility();
 	});
 </script>
 
@@ -1175,30 +1372,137 @@
 			<div bind:this={mapHost} class="h-full w-full"></div>
 
 			<div
-				class={`absolute rounded-[14px] border border-white/10 bg-[rgba(17,18,22,0.76)] px-3 py-2 text-xs text-[var(--map-text)] shadow-[0_18px_48px_rgba(0,0,0,0.28)] backdrop-blur ${
-					fullscreen ? 'top-20 right-3 hidden sm:top-20 sm:right-5 sm:block' : 'top-3 left-3'
+				class={`absolute z-20 ${
+					fullscreen ? 'top-[4.4rem] right-2 hidden sm:block' : 'top-3 right-3'
 				}`}
 			>
-				<div class="flex items-center gap-2">
-					{#if !navigationMode}
-						<button
-							type="button"
-							onclick={toggleThreeD}
-							class="rounded-full border border-white/10 bg-white/8 px-2.5 py-1 font-medium text-[var(--map-text)] transition hover:border-white/25 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
-							disabled={!mapReady}
+				<div
+					class="flex flex-col gap-2 rounded-[28px] border border-[var(--border)] bg-[rgba(255,253,248,0.92)] p-2 shadow-[0_18px_48px_rgba(36,31,23,0.16)] backdrop-blur-xl"
+				>
+					<button
+						type="button"
+						onclick={toggleThreeD}
+						class={`flex h-11 w-11 items-center justify-center rounded-[18px] border transition disabled:cursor-not-allowed disabled:opacity-45 ${
+							isThreeD || liveNavigation
+								? 'border-[#8bb7ff] bg-[#eaf3ff] text-[#2357a6]'
+								: 'border-[var(--border)] bg-[var(--surface)] text-[var(--text)] hover:border-[var(--border-strong)] hover:bg-[var(--primary-soft)]'
+						}`}
+						disabled={!mapReady || liveNavigation}
+						aria-label={liveNavigation
+							? '3D follow camera is active during live navigation'
+							: isThreeD
+								? 'Switch to 2D view'
+								: 'Switch to 3D view'}
+						aria-pressed={isThreeD || liveNavigation}
+						title={liveNavigation
+							? '3D follow camera is active during live navigation'
+							: isThreeD
+								? 'Switch to 2D view'
+								: 'Switch to 3D view'}
+					>
+						{#if isThreeD || liveNavigation}
+							<svg
+								viewBox="0 0 24 24"
+								class="h-5 w-5"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="1.9"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								aria-hidden="true"
+							>
+								<path d="m12 3 7 4-7 4-7-4 7-4Z" />
+								<path d="m5 7 7 4 7-4" />
+								<path d="M5 7v8l7 4 7-4V7" />
+								<path d="M12 11v8" />
+							</svg>
+						{:else}
+							<svg
+								viewBox="0 0 24 24"
+								class="h-5 w-5"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="1.9"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								aria-hidden="true"
+							>
+								<rect x="4" y="5" width="16" height="14" rx="2.5" />
+								<path d="M4 10h16" />
+								<path d="M9 19V10" />
+							</svg>
+						{/if}
+						<span class="sr-only"
+							>{isThreeD || liveNavigation ? '3D view enabled' : '2D view enabled'}</span
 						>
-							{isThreeD ? '3D' : '2D'}
-						</button>
-					{:else}
-						<span class="rounded-full border border-white/10 bg-white/8 px-2.5 py-1">
-							Live traffic
-						</span>
-					{/if}
+					</button>
+
+					<button
+						type="button"
+						onclick={toggleSatellite}
+						class={`flex h-11 w-11 items-center justify-center rounded-[18px] border transition disabled:cursor-not-allowed disabled:opacity-45 ${
+							isSatellite
+								? 'border-[#cda967] bg-[#fff3da] text-[#7a5a1d]'
+								: 'border-[var(--border)] bg-[var(--surface)] text-[var(--text)] hover:border-[var(--border-strong)] hover:bg-[var(--primary-soft)]'
+						}`}
+						disabled={!mapReady}
+						aria-label={isSatellite ? 'Switch to street map' : 'Switch to satellite map'}
+						aria-pressed={isSatellite}
+						title={isSatellite ? 'Switch to street map' : 'Switch to satellite map'}
+					>
+						<svg
+							viewBox="0 0 24 24"
+							class="h-5 w-5"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="1.9"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							aria-hidden="true"
+						>
+							<path d="M4.5 8.5 9 6l6 2 4.5-2.5v10L15 18l-6-2-4.5 2.5v-10Z" />
+							<path d="M9 6v10" />
+							<path d="M15 8v10" />
+						</svg>
+						<span class="sr-only"
+							>{isSatellite ? 'Satellite map enabled' : 'Street map enabled'}</span
+						>
+					</button>
+
+					<button
+						type="button"
+						onclick={toggleTraffic}
+						class={`flex h-11 w-11 items-center justify-center rounded-[18px] border transition disabled:cursor-not-allowed disabled:opacity-45 ${
+							showTraffic
+								? 'border-[#83d2a8] bg-[#e7f8ef] text-[#1d7754]'
+								: 'border-[var(--border)] bg-[var(--surface)] text-[var(--text)] hover:border-[var(--border-strong)] hover:bg-[var(--primary-soft)]'
+						}`}
+						disabled={!mapReady}
+						aria-label={showTraffic ? 'Hide traffic overlay' : 'Show traffic overlay'}
+						aria-pressed={showTraffic}
+						title={showTraffic ? 'Hide traffic overlay' : 'Show traffic overlay'}
+					>
+						<svg
+							viewBox="0 0 24 24"
+							class="h-5 w-5"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="1.9"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							aria-hidden="true"
+						>
+							<path d="M4 8h10" />
+							<path d="M4 12h16" />
+							<path d="M4 16h12" />
+							<circle cx="17.5" cy="8" r="1.5" fill="currentColor" stroke="none" />
+							<circle cx="19.5" cy="16" r="1.5" fill="currentColor" stroke="none" />
+						</svg>
+						<span class="sr-only"
+							>{showTraffic ? 'Traffic overlay enabled' : 'Traffic overlay hidden'}</span
+						>
+					</button>
 				</div>
-				{#if !fullscreen}
-					<p class="mt-2 font-medium">{isThreeD ? '3D scene enabled' : '2D scene enabled'}</p>
-					<p class="mt-1 text-white/65">Rotate, pitch, and zoom with native Mapbox controls.</p>
-				{/if}
 			</div>
 		{:else}
 			<div class="flex h-full items-center justify-center px-6 text-center text-sm text-white/70">
@@ -1225,14 +1529,14 @@
 	:global(.mapboxgl-ctrl-group),
 	:global(.mapboxgl-ctrl-scale),
 	:global(.mapboxgl-ctrl-attrib) {
-		border-color: rgba(255, 255, 255, 0.08);
-		box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
-		background: rgba(35, 40, 33, 0.92);
-		color: #edf1ea;
+		border-color: var(--border);
+		box-shadow: 0 10px 30px rgba(36, 31, 23, 0.14);
+		background: rgba(255, 253, 248, 0.96);
+		color: var(--text);
 	}
 
 	:global(.mapboxgl-ctrl button .mapboxgl-ctrl-icon) {
-		filter: invert(1);
+		filter: none;
 	}
 
 	:global(.mapboxgl-popup-content) {

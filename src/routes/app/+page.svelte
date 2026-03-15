@@ -5,6 +5,7 @@
 	import { useConvexClient, useQuery } from 'convex-svelte';
 	import { makeFunctionReference, type FunctionReference } from 'convex/server';
 	import MapSurface from '$lib/components/MapSurface.svelte';
+	import IncidentTypeIcon from '$lib/components/IncidentTypeIcon.svelte';
 	import { getClerkContext } from '$lib/stores/clerk.svelte';
 	import {
 		INCIDENT_LABELS,
@@ -26,7 +27,6 @@
 
 	type AppTab = 'pulse' | 'route' | 'account';
 	type DockHref = '/app?tab=pulse' | '/app?tab=route' | '/app?tab=account' | '/app/proof';
-	type ProfileState = 'idle' | 'loading' | 'ready' | 'error';
 	type TripSyncMode = 'remote' | 'local';
 	type RouteResponse = RankedClientRouteResult;
 	type StoredRouteOption = {
@@ -158,10 +158,6 @@
 		distanceMeters >= 1000
 			? `${(distanceMeters / 1000).toFixed(distanceMeters >= 10_000 ? 0 : 1)} km`
 			: `${Math.max(20, Math.round(distanceMeters / 10) * 10)} m`;
-	const formatCompactDistance = (distanceMeters: number) =>
-		distanceMeters >= 1000
-			? `${(distanceMeters / 1000).toFixed(distanceMeters >= 10_000 ? 0 : 1)} km away`
-			: `${Math.max(20, Math.round(distanceMeters / 10) * 10)} m away`;
 	const formatError = (error: unknown, fallback: string) =>
 		error instanceof Error ? error.message : fallback;
 	const formatArrivalTime = (timestamp: number) =>
@@ -169,34 +165,6 @@
 			hour: 'numeric',
 			minute: '2-digit'
 		});
-	const relativeTimeFormatter = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
-	const formatRelativeTime = (timestamp: number) => {
-		const diffMs = timestamp - Date.now();
-		const absDiffMs = Math.abs(diffMs);
-
-		if (absDiffMs < 60_000) {
-			return 'just now';
-		}
-
-		if (absDiffMs < 3_600_000) {
-			return relativeTimeFormatter.format(Math.round(diffMs / 60_000), 'minute');
-		}
-
-		if (absDiffMs < 86_400_000) {
-			return relativeTimeFormatter.format(Math.round(diffMs / 3_600_000), 'hour');
-		}
-
-		return relativeTimeFormatter.format(Math.round(diffMs / 86_400_000), 'day');
-	};
-	const PROFILE_TIMEOUT_MESSAGE = 'Traffic profile setup timed out.';
-	const getIncidentAccentClass = (type: IncidentType) => {
-		if (type === 'roadblock') return 'border-[#ffb089]/45 bg-[#ffefe7] text-[#7f2e10]';
-		if (type === 'vip') return 'border-[#efdca8]/40 bg-[#fff7de] text-[#6f5812]';
-		if (type === 'wedding') return 'border-[#f4c4d6]/40 bg-[#fff0f5] text-[#7a2b4d]';
-		if (type === 'flood') return 'border-[#8fd1ff]/40 bg-[#e9f6ff] text-[#0d4564]';
-		if (type === 'accident') return 'border-[#ffb7b7]/40 bg-[#fff0f0] text-[#7f1d1d]';
-		return 'border-[#c8c5ff]/35 bg-[#f3f1ff] text-[#43357f]';
-	};
 	const getTrafficBadgeClass = (level: TrafficLevel) => {
 		if (level === 'severe') return 'bg-[#ff4d4f] text-white';
 		if (level === 'heavy') return 'bg-[#ff8f1f] text-[#1b1406]';
@@ -211,6 +179,17 @@
 		if (level === 'light') return 'Light';
 		return 'Clear';
 	};
+	const getRoleLabel = (role: 'citizen' | 'campus_rep' | undefined) =>
+		role === 'campus_rep' ? 'Campus rep' : 'Citizen';
+	const getIncidentStatusClass = (status: 'active' | 'expired') =>
+		status === 'active'
+			? 'bg-[#e8f7ee] text-[#20593b]'
+			: 'bg-[var(--surface-muted)] text-[var(--muted)]';
+	const formatShortDate = (timestamp: number) =>
+		new Date(timestamp).toLocaleDateString('en-US', {
+			month: 'short',
+			day: 'numeric'
+		});
 	const formatPointLabel = (point: GeoPoint) => `${point.lat.toFixed(4)}, ${point.lng.toFixed(4)}`;
 	const createRouteDestination = (
 		point: GeoPoint,
@@ -297,8 +276,6 @@
 		tripMessage = null;
 	};
 
-	let profileState = $state<ProfileState>('idle');
-	let profileError = $state<string | null>(null);
 	let selectedType = $state<IncidentType>('roadblock');
 	let reportNote = $state('');
 	let reportSubmitting = $state(false);
@@ -307,7 +284,6 @@
 	let reportLocation = $state<GeoPoint | null>(null);
 	let reportLocationMode = $state<'pin' | 'gps' | null>(null);
 	let currentLocation = $state<GeoPoint | null>(null);
-	let locationStatus = $state('Waiting for GPS');
 	let routeResult = $state<RouteResponse | null>(null);
 	let routeLoading = $state(false);
 	let routeMessage = $state<string | null>(null);
@@ -324,10 +300,8 @@
 	let selectedRouteId = $state<string | null>(null);
 	let locationInterval = $state<number | null>(null);
 	let drawerExpanded = $state(true);
-	let incidentActionId = $state<string | null>(null);
 	let routeRequestId = $state(0);
-
-	let profileRequest: Promise<unknown> | null = null;
+	let profileSyncRequest: Promise<unknown> | null = null;
 
 	const activeTab = $derived.by((): AppTab => {
 		const tab = page.url.searchParams.get('tab');
@@ -350,82 +324,10 @@
 
 		return selectedRoute;
 	});
-	const visibleIncidents = $derived.by(() =>
-		drawerExpanded ? incidents.slice(0, 6) : incidents.slice(0, 2)
-	);
-	const activeIncidentIds = $derived.by(
-		() =>
-			new Set(
-				myIncidents
-					.filter((incident) => incident.status === 'active')
-					.map((incident) => incident._id)
-			)
-	);
 	const isSignedIn = $derived(Boolean(clerkContext.currentUser));
-	const locationLabel = $derived(
-		currentLocation
-			? `${currentLocation.lat.toFixed(4)}, ${currentLocation.lng.toFixed(4)}`
-			: 'Phnom Penh center fallback'
-	);
-	const reportLocationLabel = $derived.by(() => {
-		if (reportLocationMode === 'gps') return 'Live location';
-		if (reportLocation) return 'Pinned report spot';
-		return 'Pick a location';
-	});
-	const reportLocationDetail = $derived.by(() => {
-		if (!reportLocation) {
-			return 'Double-click on the map, press and hold on mobile, or use your live GPS to choose where this report belongs.';
-		}
-
-		if (reportLocationMode === 'gps') {
-			return `${formatPointLabel(reportLocation)} • follows your current GPS`;
-		}
-
-		return formatPointLabel(reportLocation);
-	});
-	const reportLocationDistance = $derived.by(() => {
-		if (!reportLocation || !currentLocation) return null;
-
-		const distanceMeters = haversineMeters(currentLocation, reportLocation);
-		if (distanceMeters < 25) return 'At your location';
-		return formatCompactDistance(distanceMeters);
-	});
 	const reportFocusPoints = $derived.by(() =>
 		[reportLocation, currentLocation].filter((point): point is GeoPoint => point !== null)
 	);
-	const profileStatusLabel = $derived.by(() => {
-		if (profileState === 'ready') return 'Ready';
-		if (profileState === 'loading') return 'Preparing account';
-		if (profileState === 'error') return 'Needs retry';
-		return 'Waiting';
-	});
-	const modeSummary = $derived.by(() => {
-		if (activeTab === 'route') {
-			if (tripStatus === 'tracking' && activeTrip) {
-				return `Trip live to ${activeTrip.destinationName}`;
-			}
-
-			if (selectedRoute) {
-				return `${formatMinutes(selectedRoute.durationSec)} • ${formatDistance(selectedRoute.distanceMeters)}`;
-			}
-
-			if (routeDestination) {
-				return routeDestination.label;
-			}
-
-			return 'Double-click to plan';
-		}
-
-		if (activeTab === 'account') {
-			return `${meQuery.data?.trustScore?.toFixed(1) ?? '2.0'}/5 trust`;
-		}
-
-		if (reportLocation) {
-			return `${INCIDENT_LABELS[selectedType].en} • ${reportLocationMode === 'gps' ? 'live location' : 'pin ready'}`;
-		}
-
-		return `${incidents.length} live reports`;
-	});
 	const nextCueDistanceLabel = $derived(
 		navigationRoute ? formatNavDistance(navigationRoute.navigationCue.distanceMeters) : 'Pin route'
 	);
@@ -483,13 +385,6 @@
 			};
 		}
 
-		if (profileError) {
-			return {
-				tone: 'error' as const,
-				message: profileError
-			};
-		}
-
 		return null;
 	});
 	const hasRouteContext = $derived(
@@ -519,8 +414,6 @@
 				}
 			);
 		});
-	const isProfileTimeoutError = (error: unknown) =>
-		error instanceof Error && error.message === PROFILE_TIMEOUT_MESSAGE;
 	const getMobileRouteBannerClass = (tone: 'error' | 'info' | 'success') => {
 		if (tone === 'error') {
 			return 'border-[#f1b7a4] bg-[#fff0eb] text-[#7d2c1d]';
@@ -531,61 +424,6 @@
 		}
 
 		return 'border-[#f0dfb5] bg-[#fff7e2] text-[#6d5320]';
-	};
-
-	const ensureTrafficProfile = async ({
-		silent = false,
-		allowTimeout = false
-	}: {
-		silent?: boolean;
-		allowTimeout?: boolean;
-	} = {}) => {
-		if (!clerkContext.currentUser) {
-			throw new Error('Sign in to continue.');
-		}
-
-		if (profileState === 'ready' && meQuery.data) {
-			return meQuery.data;
-		}
-
-		if (profileRequest) {
-			return profileRequest;
-		}
-
-		profileState = 'loading';
-		if (!silent) {
-			profileError = null;
-		}
-
-		profileRequest = withTimeout(
-			convex.mutation(api.authed.users.ensureProfile, {}),
-			8_000,
-			PROFILE_TIMEOUT_MESSAGE
-		)
-			.then((profile) => {
-				profileState = 'ready';
-				return profile;
-			})
-			.catch((error: unknown) => {
-				if (allowTimeout && isProfileTimeoutError(error)) {
-					profileState = 'idle';
-					if (!silent) {
-						profileError = null;
-					}
-					return null;
-				}
-
-				profileState = 'error';
-				if (!silent) {
-					profileError = formatError(error, 'Unable to prepare your traffic profile.');
-				}
-				throw error;
-			})
-			.finally(() => {
-				profileRequest = null;
-			});
-
-		return profileRequest;
 	};
 
 	const stopTripSampling = () => {
@@ -689,15 +527,6 @@
 		tripError = null;
 		tripMessage = null;
 		try {
-			const profile = await ensureTrafficProfile({
-				silent: true,
-				allowTimeout: true
-			}).catch(() => null);
-			if (!profile) {
-				startLocalTrip(routeDestination, selectedRoute);
-				return;
-			}
-
 			const session = await withTimeout(
 				convex.mutation(createRouteSessionMutation, {
 					origin: currentLocation ?? PHNOM_PENH_CENTER,
@@ -801,10 +630,15 @@
 		}
 	};
 
-	const submitIncident = async () => {
+	const submitIncident = async (type: IncidentType = selectedType) => {
 		if (reportSubmitting) return;
-		if (!reportLocation) {
-			reportError = 'Pick a location on the map or use your live GPS before sending this report.';
+		const location = reportLocation ?? currentLocation;
+		const locationMode = reportLocation ? reportLocationMode : currentLocation ? 'gps' : null;
+
+		selectedType = type;
+
+		if (!location || !locationMode) {
+			reportError = 'Drop a pin on the map or wait for GPS before reporting.';
 			reportFeedback = null;
 			drawerExpanded = true;
 			return;
@@ -815,40 +649,21 @@
 		reportError = null;
 
 		try {
-			await ensureTrafficProfile();
 			await convex.mutation(api.authed.incidents.create, {
-				type: selectedType,
-				location: reportLocation,
+				type,
+				location,
 				description: reportNote.trim() || undefined
 			});
 
 			reportNote = '';
-			drawerExpanded = true;
-			reportFeedback = `${INCIDENT_LABELS[selectedType].en} reported successfully at ${reportLocationMode === 'gps' ? 'your live location' : 'the pinned spot'}.`;
+			drawerExpanded = false;
+			reportLocation = null;
+			reportLocationMode = null;
+			reportFeedback = `${INCIDENT_LABELS[type].en} reported successfully at ${locationMode === 'gps' ? 'your live location' : 'the pinned spot'}.`;
 		} catch (error) {
 			reportError = formatError(error, 'Unable to send road report.');
 		} finally {
 			reportSubmitting = false;
-		}
-	};
-
-	const confirmIncident = async (incidentId: Id<'incidents'>) => {
-		if (activeIncidentIds.has(incidentId) || incidentActionId) return;
-
-		incidentActionId = incidentId;
-		reportFeedback = null;
-		reportError = null;
-
-		try {
-			await ensureTrafficProfile();
-			await convex.mutation(api.authed.incidents.confirm, {
-				incidentId
-			});
-			reportFeedback = 'Confirmation recorded. Thank you for verifying the report.';
-		} catch (error) {
-			reportError = formatError(error, 'Unable to confirm report.');
-		} finally {
-			incidentActionId = null;
 		}
 	};
 
@@ -873,24 +688,6 @@
 		setReportLocation(point, 'pin');
 	};
 
-	const useLiveLocationForReport = () => {
-		if (!currentLocation) {
-			reportError = 'Waiting for GPS. Try again in a moment or pin the map manually.';
-			reportFeedback = null;
-			drawerExpanded = true;
-			return;
-		}
-
-		setReportLocation(currentLocation, 'gps');
-	};
-
-	const clearReportLocation = () => {
-		reportLocation = null;
-		reportLocationMode = null;
-		reportFeedback = null;
-		reportError = null;
-	};
-
 	const pickDestinationFromMap = (point: GeoPoint) => {
 		const nextDestination = setRouteDestination(point);
 		if (!nextDestination) return;
@@ -910,16 +707,7 @@
 	};
 
 	$effect(() => {
-		if (meQuery.data) {
-			profileState = 'ready';
-			profileError = null;
-		}
-	});
-
-	$effect(() => {
 		if (!clerkContext.currentUser) {
-			profileState = 'idle';
-			profileError = null;
 			reportFeedback = null;
 			reportError = null;
 			reportLocation = null;
@@ -940,10 +728,16 @@
 			return;
 		}
 
-		void ensureTrafficProfile({
-			silent: true,
-			allowTimeout: true
-		}).catch(() => undefined);
+		if (meQuery.data || profileSyncRequest) {
+			return;
+		}
+
+		profileSyncRequest = convex
+			.mutation(api.authed.users.ensureProfile, {})
+			.catch(() => {})
+			.finally(() => {
+				profileSyncRequest = null;
+			});
 	});
 
 	$effect(() => {
@@ -954,7 +748,6 @@
 
 	$effect(() => {
 		if (!navigator.geolocation) {
-			locationStatus = 'Geolocation unavailable';
 			currentLocation = PHNOM_PENH_CENTER;
 			return;
 		}
@@ -965,10 +758,8 @@
 					lat: position.coords.latitude,
 					lng: position.coords.longitude
 				};
-				locationStatus = 'Live GPS';
 			},
 			() => {
-				locationStatus = 'Using Phnom Penh center';
 				currentLocation = PHNOM_PENH_CENTER;
 			},
 			{
@@ -1038,7 +829,7 @@
 				destinationMoveHint={activeTab === 'pulse'
 					? 'Double-click again anywhere to move this report pin.'
 					: 'Double-click again anywhere to move this destination.'}
-				navigationMode={activeTab === 'route'}
+				liveNavigation={tripStatus === 'tracking'}
 				activeRouteStyle={tripStatus === 'tracking' ? 'navigation' : 'traffic'}
 				activeRouteId={tripStatus === 'tracking'
 					? (activeTrip?.routeId ?? selectedRouteId)
@@ -1055,34 +846,8 @@
 			/>
 		</div>
 
-		<div class="pointer-events-none absolute inset-x-0 top-0 z-20 p-3 sm:p-4">
-			<div class="mx-auto flex max-w-[1440px] items-start justify-between gap-3">
-				<div
-					class={`pointer-events-auto flex flex-wrap items-center gap-2 ${
-						activeTab === 'route' && showRouteHud && tripStatus !== 'tracking'
-							? 'hidden sm:flex'
-							: activeTab === 'route'
-								? 'hidden sm:flex'
-								: ''
-					}`}
-				>
-					{#if !(activeTab === 'route' && tripStatus === 'tracking')}
-						<div
-							class="rounded-full border border-white/10 bg-[rgba(11,13,17,0.84)] px-4 py-2 shadow-[0_18px_48px_rgba(0,0,0,0.28)] backdrop-blur-xl"
-						>
-							<p class="text-[10px] tracking-[0.28em] text-white/40 uppercase">SNT</p>
-							<p class="mt-0.5 text-sm font-semibold text-white/90">
-								{panelCopy[activeTab].title} • {modeSummary}
-							</p>
-						</div>
-						<div
-							class="hidden rounded-full border border-white/10 bg-[rgba(11,13,17,0.8)] px-3 py-2 text-xs text-white/66 shadow-[0_18px_48px_rgba(0,0,0,0.22)] backdrop-blur-xl sm:block"
-						>
-							{panelCopy[activeTab].subtitle}
-						</div>
-					{/if}
-				</div>
-
+		<div class="pointer-events-none absolute inset-x-0 top-0 z-20 p-3 sm:px-2 sm:py-3">
+			<div class="mx-auto flex max-w-[1440px] items-start justify-end gap-3 sm:mx-0 sm:max-w-none">
 				<div
 					class={`pointer-events-auto flex items-center gap-2 ${
 						activeTab === 'route' && showRouteHud && tripStatus !== 'tracking'
@@ -1091,19 +856,7 @@
 					}`}
 				>
 					<div
-						class="hidden rounded-full border border-white/10 bg-[rgba(11,13,17,0.8)] px-4 py-2 text-right shadow-[0_18px_48px_rgba(0,0,0,0.22)] backdrop-blur-xl sm:block"
-					>
-						<p class="text-[10px] tracking-[0.28em] text-white/40 uppercase">{locationStatus}</p>
-						<p class="mt-0.5 text-sm font-medium text-white/88">{locationLabel}</p>
-					</div>
-					<div
-						class="hidden rounded-full border border-white/10 bg-[rgba(11,13,17,0.8)] px-4 py-2 text-right shadow-[0_18px_48px_rgba(0,0,0,0.22)] backdrop-blur-xl sm:block"
-					>
-						<p class="text-[10px] tracking-[0.28em] text-white/40 uppercase">Profile</p>
-						<p class="mt-0.5 text-sm font-medium text-white/88">{profileStatusLabel}</p>
-					</div>
-					<div
-						class="rounded-full border border-white/10 bg-[rgba(11,13,17,0.8)] p-1 shadow-[0_18px_48px_rgba(0,0,0,0.22)] backdrop-blur-xl"
+						class="rounded-full border border-[var(--border)] bg-[rgba(255,253,248,0.96)] p-1 shadow-[0_18px_48px_rgba(36,31,23,0.16)] backdrop-blur-xl sm:[&_button]:scale-110 sm:[&_button]:transform-gpu sm:[&_button]:transition-transform"
 						{@attach (element) => {
 							clerkContext.clerk.mountUserButton(element);
 						}}
@@ -1114,13 +867,13 @@
 
 		{#if activeTab === 'route' && showRouteHud}
 			<div
-				class={`pointer-events-none absolute inset-x-0 z-25 px-3 sm:px-4 ${
+				class={`pointer-events-none absolute inset-x-0 z-25 px-2 sm:px-2 ${
 					tripStatus === 'tracking'
 						? 'top-3 bottom-3 sm:top-4 sm:bottom-4'
-						: 'top-0 bottom-0 sm:top-[98px] sm:bottom-[110px]'
+						: 'top-0 bottom-0 sm:top-2 sm:bottom-[106px]'
 				}`}
 			>
-				<div class="mx-auto flex h-full max-w-[1440px] flex-col justify-between gap-3">
+				<div class="flex h-full w-full flex-col justify-between gap-3">
 					{#if tripStatus === 'tracking'}
 						<div
 							class="flex h-full flex-col justify-between px-3 pt-[calc(env(safe-area-inset-top,0px)+8px)] pb-3 sm:hidden"
@@ -1130,7 +883,7 @@
 							>
 								<div class="flex items-center gap-3">
 									<div
-										class="flex h-12 w-12 shrink-0 items-center justify-center rounded-[16px] bg-[#11161c] text-[#f7f1e4]"
+										class="flex h-12 w-12 shrink-0 items-center justify-center rounded-[16px] border border-[var(--border)] bg-[var(--surface-muted)] text-[var(--text)]"
 									>
 										{#if currentCueModifier === 'left' || currentCueModifier === 'slight left' || currentCueModifier === 'sharp left'}
 											<svg
@@ -1274,20 +1027,22 @@
 									type="button"
 									onclick={markArrived}
 									disabled={tripStatus !== 'tracking' || tripBusy !== null}
-									class="mt-3 w-full rounded-[22px] bg-[#1397ff] px-4 py-3.5 text-base font-semibold text-white shadow-[0_14px_30px_rgba(19,151,255,0.2)] disabled:opacity-50"
+									class="mt-3 w-full rounded-[22px] bg-[var(--primary)] px-4 py-3.5 text-base font-semibold text-white shadow-[0_14px_30px_rgba(90,66,41,0.22)] hover:bg-[#5a4229] disabled:opacity-50"
 								>
 									{tripBusy === 'arriving' ? 'Saving arrival...' : 'Mark arrived'}
 								</button>
 							</div>
 						</div>
 
-						<div class="hidden h-full flex-col justify-between sm:flex">
-							<div class="pointer-events-auto flex justify-center">
+						<div
+							class="hidden h-full flex-col justify-between px-3 pt-[calc(env(safe-area-inset-top,0px)+10px)] pb-[calc(env(safe-area-inset-bottom,0px)+12px)] sm:flex lg:px-5 xl:px-6"
+						>
+							<div class="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
 								<div
-									class="grid w-full max-w-[1280px] gap-3 rounded-[34px] border border-white/10 bg-[rgba(6,8,12,0.94)] p-4 shadow-[0_30px_80px_rgba(0,0,0,0.4)] backdrop-blur-2xl sm:p-5 lg:grid-cols-[112px_minmax(0,1fr)_150px_150px_220px] lg:items-center"
+									class="pointer-events-auto flex min-w-0 items-start gap-4 rounded-[32px] border border-[var(--border)] bg-[rgba(255,253,248,0.96)] px-5 py-5 text-[var(--text)] shadow-[0_28px_72px_rgba(36,31,23,0.18)] backdrop-blur-2xl"
 								>
 									<div
-										class="flex h-20 w-20 shrink-0 items-center justify-center rounded-[24px] bg-white text-black sm:h-24 sm:w-24"
+										class="flex h-24 w-24 shrink-0 items-center justify-center rounded-[28px] bg-[var(--surface-muted)] text-[var(--text)]"
 									>
 										{#if currentCueModifier === 'left' || currentCueModifier === 'slight left' || currentCueModifier === 'sharp left'}
 											<svg
@@ -1357,120 +1112,352 @@
 										{/if}
 									</div>
 
-									<div class="min-w-0 lg:pr-4">
+									<div class="min-w-0 flex-1">
 										<div class="flex flex-wrap items-start justify-between gap-3">
 											<div class="min-w-0">
+												<div class="flex flex-wrap items-center gap-3">
+													<p
+														class="text-4xl font-semibold tracking-[-0.06em] text-[var(--text)] sm:text-5xl lg:text-6xl"
+													>
+														{navigationRoute ? nextCueDistanceLabel : '--'}
+													</p>
+													<span
+														class={`inline-flex items-center rounded-full px-3 py-1.5 text-xs font-semibold sm:text-sm ${
+															navigationRoute
+																? getTrafficBadgeClass(navigationRoute.trafficLevel)
+																: 'bg-[var(--surface-muted)] text-[var(--muted)]'
+														}`}
+													>
+														{navigationRoute
+															? getTrafficLabel(navigationRoute.trafficLevel)
+															: 'Live'}
+													</span>
+												</div>
 												<p
-													class="text-4xl font-semibold tracking-[-0.06em] text-white sm:text-5xl lg:text-6xl"
-												>
-													{navigationRoute ? nextCueDistanceLabel : '--'}
-												</p>
-												<p
-													class="truncate text-[1.8rem] font-semibold tracking-[-0.05em] text-[#55c6ff] sm:text-[2.2rem]"
+													class="mt-2 truncate text-[1.6rem] font-semibold tracking-[-0.05em] text-[var(--primary)] sm:text-[2rem]"
 												>
 													{navigationRoadLabel}
 												</p>
 											</div>
-											<span
-												class={`shrink-0 rounded-full px-3 py-1.5 text-xs font-semibold sm:text-sm lg:hidden ${
-													navigationRoute
-														? getTrafficBadgeClass(navigationRoute.trafficLevel)
-														: 'bg-white/10 text-white/72'
-												}`}
-											>
-												{navigationRoute ? getTrafficLabel(navigationRoute.trafficLevel) : 'Live'}
-											</span>
 										</div>
 
-										<p class="mt-2 max-w-[48rem] text-base leading-7 text-white/70">
+										<p
+											class="mt-3 max-w-[52rem] text-base leading-7 text-[var(--muted)] lg:text-lg"
+										>
 											{navigationInstruction}
 										</p>
 									</div>
+								</div>
 
-									<div class="rounded-[22px] border border-white/8 bg-white/[0.04] px-4 py-3">
-										<p class="text-[10px] tracking-[0.3em] text-white/34 uppercase">ETA</p>
-										<p class="mt-1 text-xl font-semibold text-white sm:text-2xl">
-											{nextArrivalLabel}
-										</p>
-									</div>
-
-									<div class="rounded-[22px] border border-white/8 bg-white/[0.04] px-4 py-3">
-										<p class="text-[10px] tracking-[0.3em] text-white/34 uppercase">Trip</p>
-										<p class="mt-1 text-xl font-semibold text-white sm:text-2xl">
-											{navigationRoute ? formatMinutes(navigationRoute.durationSec) : '--'}
-										</p>
-									</div>
-
-									<div class="rounded-[22px] border border-white/8 bg-white/[0.04] px-4 py-3">
-										<div class="flex items-center justify-between gap-3">
-											<p class="text-[10px] tracking-[0.3em] text-white/34 uppercase">Traffic</p>
-											<span
-												class={`hidden rounded-full px-3 py-1 text-xs font-semibold lg:inline-flex ${
-													navigationRoute
-														? getTrafficBadgeClass(navigationRoute.trafficLevel)
-														: 'bg-white/10 text-white/72'
-												}`}
+								<div class="pointer-events-auto grid gap-3">
+									<div
+										class="rounded-[26px] border border-[var(--border)] bg-[rgba(255,253,248,0.96)] px-4 py-3.5 text-[var(--text)] shadow-[0_20px_48px_rgba(36,31,23,0.16)] backdrop-blur-2xl"
+									>
+										<div class="flex items-center gap-3">
+											<div
+												class="flex h-11 w-11 shrink-0 items-center justify-center rounded-[16px] bg-[var(--surface-muted)] text-[var(--primary)]"
 											>
-												{navigationRoute ? getTrafficLabel(navigationRoute.trafficLevel) : 'Live'}
-											</span>
+												<svg
+													viewBox="0 0 24 24"
+													class="h-5 w-5"
+													fill="none"
+													stroke="currentColor"
+													stroke-width="2"
+													stroke-linecap="round"
+													stroke-linejoin="round"
+												>
+													<circle cx="12" cy="12" r="8" />
+													<path d="M12 8v4l2.5 2.5" />
+												</svg>
+											</div>
+											<div class="min-w-0">
+												<p class="text-[10px] tracking-[0.28em] text-[var(--muted)] uppercase">
+													ETA
+												</p>
+												<p class="mt-1 text-2xl font-semibold text-[var(--text)]">
+													{nextArrivalLabel}
+												</p>
+											</div>
 										</div>
-										<p class="mt-1 text-base font-semibold text-white sm:text-lg">
-											{navigationRoute?.trafficSummary ?? 'Live route'}
-										</p>
+									</div>
+
+									<div
+										class="rounded-[26px] border border-[var(--border)] bg-[rgba(255,253,248,0.96)] px-4 py-3.5 text-[var(--text)] shadow-[0_20px_48px_rgba(36,31,23,0.16)] backdrop-blur-2xl"
+									>
+										<div class="flex items-center gap-3">
+											<div
+												class="flex h-11 w-11 shrink-0 items-center justify-center rounded-[16px] bg-[var(--surface-muted)] text-[var(--primary)]"
+											>
+												<svg
+													viewBox="0 0 24 24"
+													class="h-5 w-5"
+													fill="none"
+													stroke="currentColor"
+													stroke-width="2"
+													stroke-linecap="round"
+													stroke-linejoin="round"
+												>
+													<path d="M4 18h8" />
+													<path d="M4 12h16" />
+													<path d="M4 6h12" />
+													<path d="m14 16 3 3 4-6" />
+												</svg>
+											</div>
+											<div class="min-w-0">
+												<p class="text-[10px] tracking-[0.28em] text-[var(--muted)] uppercase">
+													Trip
+												</p>
+												<p class="mt-1 text-2xl font-semibold text-[var(--text)]">
+													{navigationRoute ? formatMinutes(navigationRoute.durationSec) : '--'}
+												</p>
+											</div>
+										</div>
+									</div>
+
+									<div
+										class="rounded-[26px] border border-[var(--border)] bg-[rgba(255,253,248,0.96)] px-4 py-3.5 text-[var(--text)] shadow-[0_20px_48px_rgba(36,31,23,0.16)] backdrop-blur-2xl"
+									>
+										<div class="flex items-start gap-3">
+											<div
+												class="flex h-11 w-11 shrink-0 items-center justify-center rounded-[16px] bg-[var(--surface-muted)] text-[var(--primary)]"
+											>
+												<svg
+													viewBox="0 0 24 24"
+													class="h-5 w-5"
+													fill="none"
+													stroke="currentColor"
+													stroke-width="2"
+													stroke-linecap="round"
+													stroke-linejoin="round"
+												>
+													<path d="M4 7h16" />
+													<path d="M7 12h10" />
+													<path d="M10 17h4" />
+												</svg>
+											</div>
+											<div class="min-w-0 flex-1">
+												<div class="flex items-center justify-between gap-3">
+													<p class="text-[10px] tracking-[0.28em] text-[var(--muted)] uppercase">
+														Traffic
+													</p>
+													<span
+														class={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+															navigationRoute
+																? getTrafficBadgeClass(navigationRoute.trafficLevel)
+																: 'bg-[var(--surface-muted)] text-[var(--muted)]'
+														}`}
+													>
+														{navigationRoute
+															? getTrafficLabel(navigationRoute.trafficLevel)
+															: 'Live'}
+													</span>
+												</div>
+												<p class="mt-1 text-base font-semibold text-[var(--text)]">
+													{navigationRoute?.trafficSummary ?? 'Live route'}
+												</p>
+											</div>
+										</div>
 									</div>
 								</div>
 							</div>
 
 							<div class="pointer-events-none flex-1"></div>
 
-							<div class="grid items-end gap-3 lg:grid-cols-[minmax(0,420px)_minmax(0,1fr)_260px]">
-								<div class="pointer-events-auto space-y-2">
+							<div
+								class="grid items-end gap-4 lg:grid-cols-[minmax(0,480px)_minmax(300px,380px)] lg:justify-between"
+							>
+								<div class="pointer-events-auto space-y-3">
 									<div
-										class="rounded-[24px] border border-white/10 bg-[rgba(11,13,17,0.88)] px-4 py-3 shadow-[0_22px_56px_rgba(0,0,0,0.3)] backdrop-blur-2xl"
+										class="rounded-[28px] border border-[var(--border)] bg-[rgba(255,253,248,0.96)] px-5 py-4 text-[var(--text)] shadow-[0_24px_60px_rgba(36,31,23,0.16)] backdrop-blur-2xl"
 									>
-										<p class="text-[10px] tracking-[0.28em] text-white/38 uppercase">Live trip</p>
-										<p class="mt-1 text-xl font-semibold text-white">{activeRouteLabel}</p>
-										<p class="mt-1 text-sm text-white/60">
-											Arrive {nextArrivalLabel} • {navigationRoute
-												? formatDistance(navigationRoute.distanceMeters)
-												: '--'}
-										</p>
+										<div class="flex items-start gap-3">
+											<div
+												class="mt-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-[16px] bg-[var(--surface-muted)] text-[var(--primary)]"
+											>
+												<svg
+													viewBox="0 0 24 24"
+													class="h-5 w-5"
+													fill="none"
+													stroke="currentColor"
+													stroke-width="2"
+													stroke-linecap="round"
+													stroke-linejoin="round"
+												>
+													<path d="M4 18h7" />
+													<path d="M4 12h11" />
+													<path d="M4 6h16" />
+													<circle cx="18" cy="18" r="2" />
+												</svg>
+											</div>
+											<div class="min-w-0 flex-1">
+												<p class="text-[10px] tracking-[0.28em] text-[var(--muted)] uppercase">
+													Live trip
+												</p>
+												<p
+													class="mt-1 text-2xl font-semibold tracking-[-0.04em] text-[var(--text)]"
+												>
+													{activeRouteLabel}
+												</p>
+												<div
+													class="mt-3 flex flex-wrap items-center gap-3 text-sm text-[var(--muted)]"
+												>
+													<span class="inline-flex items-center gap-1.5">
+														<svg
+															viewBox="0 0 24 24"
+															class="h-4 w-4"
+															fill="none"
+															stroke="currentColor"
+															stroke-width="2"
+															stroke-linecap="round"
+															stroke-linejoin="round"
+														>
+															<circle cx="12" cy="12" r="8" />
+															<path d="M12 8v4l2.5 2.5" />
+														</svg>
+														Arrive {nextArrivalLabel}
+													</span>
+													<span class="inline-flex items-center gap-1.5">
+														<svg
+															viewBox="0 0 24 24"
+															class="h-4 w-4"
+															fill="none"
+															stroke="currentColor"
+															stroke-width="2"
+															stroke-linecap="round"
+															stroke-linejoin="round"
+														>
+															<path d="M12 21s6-4.35 6-10a6 6 0 1 0-12 0c0 5.65 6 10 6 10Z" />
+															<circle cx="12" cy="11" r="2.5" />
+														</svg>
+														{navigationRoute
+															? formatDistance(navigationRoute.distanceMeters)
+															: '--'}
+													</span>
+													{#if activeTripSyncMode === 'local'}
+														<span class="inline-flex items-center gap-1.5">
+															<svg
+																viewBox="0 0 24 24"
+																class="h-4 w-4"
+																fill="none"
+																stroke="currentColor"
+																stroke-width="2"
+																stroke-linecap="round"
+																stroke-linejoin="round"
+															>
+																<path d="M4 7h16" />
+																<path d="M7 12h10" />
+																<path d="M10 17h4" />
+															</svg>
+															Local only
+														</span>
+													{/if}
+												</div>
+											</div>
+										</div>
 									</div>
 
 									{#if tripError}
-										<div class="rounded-[20px] bg-[#a44c39]/20 px-4 py-3 text-sm text-[#ffd2c6]">
-											{tripError}
+										<div
+											class="rounded-[20px] border border-[var(--danger)] bg-[var(--danger-soft)] px-4 py-3 text-sm text-[var(--danger)]"
+										>
+											<div class="flex items-start gap-2.5">
+												<svg
+													viewBox="0 0 24 24"
+													class="mt-0.5 h-4 w-4 shrink-0"
+													fill="none"
+													stroke="currentColor"
+													stroke-width="2.2"
+													stroke-linecap="round"
+													stroke-linejoin="round"
+												>
+													<circle cx="12" cy="12" r="9" />
+													<path d="M12 8v5" />
+													<circle cx="12" cy="16.5" r="0.8" fill="currentColor" stroke="none" />
+												</svg>
+												<span>{tripError}</span>
+											</div>
 										</div>
 									{/if}
 									{#if tripMessage}
-										<div class="rounded-[20px] bg-[#7fc7ae]/16 px-4 py-3 text-sm text-[#d9fff2]">
-											{tripMessage}
+										<div
+											class="rounded-[20px] border border-[var(--accent-soft)] bg-[var(--accent-soft)] px-4 py-3 text-sm text-[var(--accent)]"
+										>
+											<div class="flex items-start gap-2.5">
+												<svg
+													viewBox="0 0 24 24"
+													class="mt-0.5 h-4 w-4 shrink-0"
+													fill="none"
+													stroke="currentColor"
+													stroke-width="2.2"
+													stroke-linecap="round"
+													stroke-linejoin="round"
+												>
+													<path d="M4 12h16" />
+													<path d="m13 5 7 7-7 7" />
+												</svg>
+												<span>{tripMessage}</span>
+											</div>
 										</div>
 									{/if}
 								</div>
 
 								<div
-									class="pointer-events-auto flex flex-wrap items-center justify-center gap-2 lg:justify-self-center"
+									class="pointer-events-auto flex flex-col items-stretch gap-3 lg:justify-self-end"
 								>
-									<span
-										class="rounded-full border border-white/10 bg-[rgba(11,13,17,0.84)] px-3 py-2 text-xs font-medium text-white/72 backdrop-blur-xl"
-									>
-										Destination: {currentRouteDestinationLabel}
-									</span>
-									<span
-										class="rounded-full border border-white/10 bg-[rgba(11,13,17,0.84)] px-3 py-2 text-xs font-medium text-white/72 backdrop-blur-xl"
-									>
-										Path stays blue above traffic
-									</span>
-								</div>
+									<div class="flex flex-wrap justify-end gap-2">
+										<span
+											class="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-[rgba(255,253,248,0.96)] px-3.5 py-2 text-xs font-medium text-[var(--muted)] shadow-[0_12px_28px_rgba(36,31,23,0.1)] backdrop-blur-xl"
+										>
+											<svg
+												viewBox="0 0 24 24"
+												class="h-4 w-4"
+												fill="none"
+												stroke="currentColor"
+												stroke-width="2"
+												stroke-linecap="round"
+												stroke-linejoin="round"
+											>
+												<path d="M12 21s6-4.35 6-10a6 6 0 1 0-12 0c0 5.65 6 10 6 10Z" />
+												<circle cx="12" cy="11" r="2.5" />
+											</svg>
+											{currentRouteDestinationLabel}
+										</span>
+										<span
+											class="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-[rgba(255,253,248,0.96)] px-3.5 py-2 text-xs font-medium text-[var(--muted)] shadow-[0_12px_28px_rgba(36,31,23,0.1)] backdrop-blur-xl"
+										>
+											<svg
+												viewBox="0 0 24 24"
+												class="h-4 w-4"
+												fill="none"
+												stroke="currentColor"
+												stroke-width="2"
+												stroke-linecap="round"
+												stroke-linejoin="round"
+											>
+												<path d="M5 19 19 5" />
+												<path d="m9 5 10 0 0 10" />
+											</svg>
+											Traffic-aware path
+										</span>
+									</div>
 
-								<div class="pointer-events-auto lg:justify-self-end">
 									<button
 										type="button"
 										onclick={markArrived}
 										disabled={tripStatus !== 'tracking' || tripBusy !== null}
-										class="w-full min-w-[220px] rounded-[24px] border border-white/10 bg-[rgba(11,13,17,0.92)] px-6 py-5 text-lg font-semibold text-white/92 shadow-[0_24px_64px_rgba(0,0,0,0.34)] backdrop-blur-2xl disabled:opacity-50"
+										class="flex min-w-[240px] items-center justify-center gap-3 self-end rounded-[26px] bg-[var(--primary)] px-6 py-5 text-lg font-semibold text-white shadow-[0_24px_64px_rgba(90,66,41,0.24)] backdrop-blur-2xl hover:bg-[#5a4229] disabled:opacity-50"
 									>
+										<svg
+											viewBox="0 0 24 24"
+											class="h-5 w-5"
+											fill="none"
+											stroke="currentColor"
+											stroke-width="2.2"
+											stroke-linecap="round"
+											stroke-linejoin="round"
+										>
+											<path d="M5 13l4 4L19 7" />
+										</svg>
 										{tripBusy === 'arriving' ? 'Saving...' : 'Arrived'}
 									</button>
 								</div>
@@ -1497,7 +1484,7 @@
 									<button
 										type="button"
 										onclick={clearRoutePlan}
-										class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-black/8 bg-white text-black/70 shadow-[0_10px_24px_rgba(0,0,0,0.08)]"
+										class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface)] text-[var(--muted)] shadow-[0_10px_24px_rgba(36,31,23,0.08)]"
 										aria-label="Dismiss route planner"
 									>
 										<svg
@@ -1575,7 +1562,7 @@
 													onclick={() => selectRoute(route.routeId)}
 													class={`rounded-[20px] border px-3 py-3 text-left transition ${
 														selectedRouteId === route.routeId
-															? 'border-[#78b8ff] bg-[#eaf4ff] shadow-[0_10px_24px_rgba(19,151,255,0.14)]'
+															? 'border-[var(--border-strong)] bg-[var(--primary-soft)] shadow-[0_10px_24px_rgba(90,66,41,0.1)]'
 															: 'border-black/8 bg-[#f8f8f6]'
 													}`}
 												>
@@ -1613,7 +1600,7 @@
 									<button
 										type="button"
 										onclick={clearRoutePlan}
-										class="rounded-full bg-[#ececec] px-3 py-2.5 text-sm font-semibold text-black/70"
+										class="rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5 text-sm font-semibold text-[var(--muted)]"
 									>
 										Later
 									</button>
@@ -1621,7 +1608,7 @@
 										type="button"
 										onclick={() => void planRoute()}
 										disabled={!routeDestination || routeLoading}
-										class="rounded-full border border-black/10 bg-white px-3 py-2.5 text-sm font-semibold text-black/64 disabled:opacity-50"
+										class="rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5 text-sm font-semibold text-[var(--muted)] disabled:opacity-50"
 									>
 										Refresh
 									</button>
@@ -1629,7 +1616,7 @@
 										type="button"
 										onclick={beginTrip}
 										disabled={!selectedRoute || tripBusy !== null}
-										class="rounded-full bg-[#1397ff] px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
+										class="rounded-full bg-[var(--primary)] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#5a4229] disabled:opacity-50"
 									>
 										{tripBusy === 'starting' ? 'Starting...' : 'Go'}
 									</button>
@@ -1638,72 +1625,84 @@
 						</div>
 
 						<div
-							class="hidden gap-3 lg:grid lg:grid-cols-[250px_minmax(0,1fr)_320px] lg:items-start"
+							class="hidden h-full gap-2 lg:grid lg:grid-cols-[248px_minmax(0,1fr)_300px] lg:items-start"
 						>
 							<div
-								class="pointer-events-auto rounded-[24px] border border-white/10 bg-[rgba(11,13,17,0.88)] p-3 shadow-[0_20px_54px_rgba(0,0,0,0.28)] backdrop-blur-2xl"
+								class="pointer-events-auto self-start rounded-[22px] border border-[var(--border)] bg-[rgba(255,253,248,0.96)] p-3 text-[var(--text)] shadow-[0_20px_54px_rgba(36,31,23,0.14)] backdrop-blur-2xl"
 							>
-								<div class="flex items-start justify-between gap-3">
+								<div class="flex items-start justify-between gap-2">
 									<div class="min-w-0">
-										<p class="text-[10px] tracking-[0.28em] text-white/40 uppercase">Destination</p>
-										<p class="mt-2 truncate text-xl font-semibold tracking-[-0.04em] text-white/92">
+										<p
+											class="truncate text-[1.1rem] font-semibold tracking-[-0.04em] text-[var(--text)]"
+										>
 											{currentRouteDestinationLabel}
 										</p>
-										<p class="mt-1 text-xs leading-5 text-white/60">
+										<p class="mt-0.5 text-[11px] leading-4 text-[var(--muted)]">
 											{currentRouteDestinationDetail}
 										</p>
 									</div>
-									<span
-										class={`shrink-0 rounded-full px-3 py-1 text-xs font-semibold ${
-											navigationRoute
-												? getTrafficBadgeClass(navigationRoute.trafficLevel)
-												: 'bg-white/10 text-white/72'
-										}`}
-									>
-										{navigationRoute ? getTrafficLabel(navigationRoute.trafficLevel) : 'Standby'}
-									</span>
+									<div class="flex shrink-0 items-center gap-1.5">
+										<span
+											class={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${
+												navigationRoute
+													? getTrafficBadgeClass(navigationRoute.trafficLevel)
+													: 'bg-[var(--surface-muted)] text-[var(--muted)]'
+											}`}
+										>
+											{navigationRoute ? getTrafficLabel(navigationRoute.trafficLevel) : 'Standby'}
+										</span>
+										<button
+											type="button"
+											onclick={() => void planRoute()}
+											disabled={!routeDestination || routeLoading}
+											class="flex h-9 w-9 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface)] text-[var(--muted)] hover:border-[var(--border-strong)] hover:bg-[var(--primary-soft)] disabled:opacity-50"
+											aria-label="Refresh routes"
+											title="Refresh routes"
+										>
+											<svg
+												viewBox="0 0 24 24"
+												class="h-[18px] w-[18px]"
+												fill="none"
+												stroke="currentColor"
+												stroke-width="2.2"
+												stroke-linecap="round"
+												stroke-linejoin="round"
+											>
+												<path d="M21 12a9 9 0 1 1-2.64-6.36" />
+												<path d="M21 3v6h-6" />
+											</svg>
+										</button>
+									</div>
 								</div>
 
-								<div class="mt-3 flex flex-wrap gap-1.5">
+								<div class="mt-2.5 flex flex-wrap gap-1.5">
 									{#each UNIVERSITY_SEEDS as university (university.id)}
 										<button
 											type="button"
 											onclick={() => choosePresetDestination(university)}
-											class={`rounded-full border px-2.5 py-1.5 text-[11px] font-medium ${
+											class={`rounded-full border px-2 py-1 text-[10px] font-medium ${
 												routeDestination?.presetId === university.id
-													? 'border-[#f1deba] bg-[#f1deba] text-[#171717]'
-													: 'border-white/10 bg-white/[0.05] text-white/74 hover:bg-white/[0.08]'
+													? 'border-[var(--border-strong)] bg-[var(--surface-muted)] text-[var(--text)]'
+													: 'border-[var(--border)] bg-[var(--surface)] text-[var(--muted)] hover:border-[var(--border-strong)] hover:bg-[var(--primary-soft)]'
 											}`}
 										>
 											{university.shortName}
 										</button>
 									{/each}
-									<button
-										type="button"
-										onclick={() => void planRoute()}
-										disabled={!routeDestination || routeLoading}
-										class="rounded-full border border-white/10 bg-white/[0.05] px-2.5 py-1.5 text-[11px] font-medium text-white/82 hover:bg-white/[0.08] disabled:opacity-50"
-									>
-										{routeLoading ? 'Refreshing...' : 'Refresh'}
-									</button>
 								</div>
-
-								<p class="mt-3 text-[11px] leading-4 text-white/46">
-									Double-click to move the pin.
-								</p>
 							</div>
 
 							<div class="pointer-events-auto lg:self-start lg:justify-self-center">
 								<div
-									class="mx-auto w-full max-w-[720px] rounded-[26px] border border-white/10 bg-[rgba(11,13,17,0.9)] px-4 py-3 shadow-[0_24px_68px_rgba(0,0,0,0.32)] backdrop-blur-2xl"
+									class="mx-auto w-full max-w-[560px] rounded-[24px] border border-[var(--border)] bg-[rgba(255,253,248,0.96)] px-3.5 py-3 text-[var(--text)] shadow-[0_24px_68px_rgba(36,31,23,0.16)] backdrop-blur-2xl"
 								>
-									<div class="flex items-center gap-4">
+									<div class="flex items-start gap-3">
 										<div
-											class="flex h-14 w-14 shrink-0 items-center justify-center rounded-[18px] bg-white text-black"
+											class="mt-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-[15px] bg-[var(--surface-muted)] text-[var(--text)]"
 										>
 											<svg
 												viewBox="0 0 24 24"
-												class="h-8 w-8"
+												class="h-6 w-6"
 												fill="none"
 												stroke="currentColor"
 												stroke-width="2.2"
@@ -1715,38 +1714,85 @@
 											</svg>
 										</div>
 
-										<div class="min-w-0">
-											<p class="text-[10px] tracking-[0.28em] text-white/38 uppercase">
-												Route preview
-											</p>
-											<p class="mt-1 text-2xl font-semibold tracking-[-0.05em] text-white">
-												{navigationRoute ? nextCueDistanceLabel : 'Ready to plan'}
-											</p>
-											<p class="truncate text-sm font-medium text-[#55c6ff]">
-												{navigationRoute?.navigationCue.roadName ?? currentRouteDestinationLabel}
-											</p>
+										<div class="min-w-0 flex-1">
+											<div class="flex items-start justify-between gap-3">
+												<div class="min-w-0">
+													<p
+														class="text-[2rem] leading-none font-semibold tracking-[-0.05em] text-[var(--text)]"
+													>
+														{navigationRoute ? nextCueDistanceLabel : 'Ready'}
+													</p>
+													<p class="mt-1 truncate text-sm font-medium text-[var(--primary)]">
+														{navigationRoute?.navigationCue.roadName ??
+															currentRouteDestinationLabel}
+													</p>
+												</div>
+												{#if navigationRoute}
+													<span
+														class={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold ${getTrafficBadgeClass(navigationRoute.trafficLevel)}`}
+													>
+														{getTrafficLabel(navigationRoute.trafficLevel)}
+													</span>
+												{/if}
+											</div>
 										</div>
 									</div>
 
-									<p class="mt-3 text-sm leading-6 text-white/74">
-										{navigationRoute?.navigationCue.instruction ??
-											'Pick or pin a destination and the map will load traffic-aware routes automatically.'}
-									</p>
-
-									<div class="mt-3 grid grid-cols-3 gap-2">
-										<div class="rounded-[16px] border border-white/8 bg-white/[0.04] px-3 py-2.5">
-											<p class="text-[10px] tracking-[0.24em] text-white/38 uppercase">ETA</p>
-											<p class="mt-1 text-base font-semibold text-white">{nextArrivalLabel}</p>
+									<div class="mt-2.5 grid grid-cols-3 gap-1.5">
+										<div
+											class="flex items-center gap-2 rounded-[15px] border border-[var(--border)] bg-[var(--surface)] px-3 py-2"
+										>
+											<svg
+												viewBox="0 0 24 24"
+												class="h-4 w-4 shrink-0 text-[var(--muted)]"
+												fill="none"
+												stroke="currentColor"
+												stroke-width="2.2"
+												stroke-linecap="round"
+												stroke-linejoin="round"
+											>
+												<circle cx="12" cy="12" r="8" />
+												<path d="M12 8v4l2.5 2.5" />
+											</svg>
+											<p class="text-[15px] font-semibold text-[var(--text)]">{nextArrivalLabel}</p>
 										</div>
-										<div class="rounded-[16px] border border-white/8 bg-white/[0.04] px-3 py-2.5">
-											<p class="text-[10px] tracking-[0.24em] text-white/38 uppercase">Trip</p>
-											<p class="mt-1 text-base font-semibold text-white">
+										<div
+											class="flex items-center gap-2 rounded-[15px] border border-[var(--border)] bg-[var(--surface)] px-3 py-2"
+										>
+											<svg
+												viewBox="0 0 24 24"
+												class="h-4 w-4 shrink-0 text-[var(--muted)]"
+												fill="none"
+												stroke="currentColor"
+												stroke-width="2.2"
+												stroke-linecap="round"
+												stroke-linejoin="round"
+											>
+												<path d="M10 2h4" />
+												<path d="M12 14v-4" />
+												<circle cx="12" cy="14" r="8" />
+											</svg>
+											<p class="text-[15px] font-semibold text-[var(--text)]">
 												{navigationRoute ? formatMinutes(navigationRoute.durationSec) : '--'}
 											</p>
 										</div>
-										<div class="rounded-[16px] border border-white/8 bg-white/[0.04] px-3 py-2.5">
-											<p class="text-[10px] tracking-[0.24em] text-white/38 uppercase">Traffic</p>
-											<p class="mt-1 truncate text-xs font-semibold text-white">
+										<div
+											class="flex items-center gap-2 rounded-[15px] border border-[var(--border)] bg-[var(--surface)] px-3 py-2"
+										>
+											<svg
+												viewBox="0 0 24 24"
+												class="h-4 w-4 shrink-0 text-[var(--muted)]"
+												fill="none"
+												stroke="currentColor"
+												stroke-width="2.2"
+												stroke-linecap="round"
+												stroke-linejoin="round"
+											>
+												<path d="M18 17H6" />
+												<path d="M15 12H6" />
+												<path d="M12 7H6" />
+											</svg>
+											<p class="truncate text-[11px] font-semibold text-[var(--text)]">
 												{navigationRoute?.trafficSummary ?? 'Planning'}
 											</p>
 										</div>
@@ -1755,58 +1801,65 @@
 							</div>
 
 							<div
-								class="pointer-events-auto hidden max-h-[calc(100svh-230px)] overflow-hidden rounded-[24px] border border-white/10 bg-[rgba(11,13,17,0.9)] shadow-[0_24px_68px_rgba(0,0,0,0.32)] backdrop-blur-2xl lg:block"
+								class="pointer-events-auto hidden max-h-[calc(100svh-220px)] overflow-hidden rounded-[22px] border border-[var(--border)] bg-[rgba(255,253,248,0.96)] text-[var(--text)] shadow-[0_24px_68px_rgba(36,31,23,0.16)] backdrop-blur-2xl lg:block"
 							>
-								<div class="border-b border-white/8 px-3 py-2.5">
-									<p class="text-[10px] tracking-[0.28em] text-white/40 uppercase">Route options</p>
-									<p class="mt-1 text-base font-semibold text-white/92">
-										{routeOptions.length > 0
-											? `${routeOptions.length} choices live`
-											: 'Waiting for routes'}
+								<div
+									class="flex items-center justify-between border-b border-[var(--border)] px-3 py-2"
+								>
+									<p class="text-[1.05rem] font-semibold text-[var(--text)]">
+										{routeOptions.length > 0 ? `${routeOptions.length} routes` : 'Routes'}
 									</p>
+									{#if selectedRoute}
+										<p class="text-xs text-[var(--muted)]">
+											{formatMinutes(selectedRoute.durationSec)}
+										</p>
+									{/if}
 								</div>
 
-								<div class="max-h-[calc(100svh-300px)] space-y-2 overflow-y-auto p-2.5">
+								<div class="max-h-[calc(100svh-284px)] space-y-1.5 overflow-y-auto p-2">
 									{#if routeLoading}
 										<div
-											class="rounded-[22px] border border-white/8 bg-white/[0.04] px-4 py-4 text-sm text-white/64"
+											class="rounded-[22px] border border-[var(--border)] bg-[var(--surface)] px-4 py-4 text-sm text-[var(--muted)]"
 										>
-											Loading traffic-aware routes for {currentRouteDestinationLabel}.
+											Loading routes...
 										</div>
 									{:else if !routeDestination}
 										<div
-											class="rounded-[22px] border border-dashed border-white/10 bg-white/[0.04] px-4 py-4 text-sm text-white/64"
+											class="rounded-[22px] border border-dashed border-[var(--border)] bg-[var(--surface)] px-4 py-4 text-sm text-[var(--muted)]"
 										>
-											Double-click the map to pin a destination.
+											Double-click to pin.
 										</div>
 									{:else if routeOptions.length === 0}
 										<div
-											class="rounded-[22px] border border-white/8 bg-white/[0.04] px-4 py-4 text-sm text-white/64"
+											class="rounded-[22px] border border-[var(--border)] bg-[var(--surface)] px-4 py-4 text-sm text-[var(--muted)]"
 										>
-											No route options came back for this pin yet. Try moving the destination
-											slightly.
+											No routes yet. Move the pin.
 										</div>
 									{:else}
 										{#each routeOptions as route (route.routeId)}
 											<button
 												type="button"
 												onclick={() => selectRoute(route.routeId)}
-												class={`block w-full rounded-[20px] border px-3 py-3 text-left transition ${
+												class={`block w-full rounded-[18px] border px-3 py-2.5 text-left transition ${
 													selectedRouteId === route.routeId
-														? 'border-[#55c6ff]/45 bg-[#55c6ff]/10'
-														: 'border-white/8 bg-white/[0.04] hover:bg-white/[0.06]'
+														? 'border-[var(--border-strong)] bg-[var(--primary-soft)]'
+														: 'border-[var(--border)] bg-[var(--surface)] hover:border-[var(--border-strong)] hover:bg-[var(--primary-soft)]'
 												}`}
 											>
-												<div class="flex items-start justify-between gap-3">
+												<div class="flex items-start justify-between gap-2">
 													<div class="min-w-0">
-														<p class="text-sm font-medium text-white/90">{route.label}</p>
-														<p class="mt-1 text-xs text-white/54">
-															Arrive {formatArrivalTime(route.arrivalTime)} • {formatMinutes(
-																route.durationSec
-															)} • {formatDistance(route.distanceMeters)}
-														</p>
+														<p class="text-sm font-medium text-[var(--text)]">{route.label}</p>
+														<div
+															class="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] text-[var(--muted)]"
+														>
+															<span>{formatMinutes(route.durationSec)}</span>
+															<span class="h-1 w-1 rounded-full bg-[var(--border-strong)]"></span>
+															<span>{formatDistance(route.distanceMeters)}</span>
+															<span class="h-1 w-1 rounded-full bg-[var(--border-strong)]"></span>
+															<span>{formatArrivalTime(route.arrivalTime)}</span>
+														</div>
 													</div>
-													<div class="flex shrink-0 items-center gap-2">
+													<div class="flex shrink-0 items-center gap-1.5">
 														<span
 															class={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${getTrafficBadgeClass(route.trafficLevel)}`}
 														>
@@ -1814,34 +1867,55 @@
 														</span>
 														{#if selectedRouteId === route.routeId}
 															<span
-																class="rounded-full bg-[#55c6ff] px-2.5 py-1 text-[11px] font-semibold text-[#05131d]"
+																class="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--surface-muted)] text-[var(--text)]"
+																aria-label="Selected route"
+																title="Selected route"
 															>
-																Selected
+																<svg
+																	viewBox="0 0 24 24"
+																	class="h-[18px] w-[18px]"
+																	fill="none"
+																	stroke="currentColor"
+																	stroke-width="2.4"
+																	stroke-linecap="round"
+																	stroke-linejoin="round"
+																>
+																	<path d="m5 12 4 4L19 6" />
+																</svg>
 															</span>
 														{/if}
 													</div>
 												</div>
-
-												<p class="mt-2 text-sm text-white/70">{route.navigationCue.instruction}</p>
-
 												<div class="mt-2 flex flex-wrap gap-1.5">
-													<span
-														class="rounded-full bg-white/[0.05] px-2 py-1 text-[11px] text-white/62"
-													>
-														{route.trafficSummary}
-													</span>
-													<span
-														class="rounded-full bg-white/[0.05] px-2 py-1 text-[11px] text-white/62"
-													>
-														{route.incidentIds.length} incident matches
-													</span>
-													{#each route.explanationChips.slice(1, 3) as chip (chip)}
+													{#if route.incidentIds.length > 0}
 														<span
-															class="rounded-full bg-white/[0.05] px-2 py-1 text-[11px] text-white/62"
+															class="inline-flex items-center gap-1 rounded-full bg-[var(--surface-muted)] px-2 py-1 text-[11px] text-[var(--muted)]"
 														>
-															{chip}
+															<svg
+																viewBox="0 0 24 24"
+																class="h-[14px] w-[14px]"
+																fill="none"
+																stroke="currentColor"
+																stroke-width="2.2"
+																stroke-linecap="round"
+																stroke-linejoin="round"
+															>
+																<path d="M12 9v4" />
+																<path d="M12 17h.01" />
+																<path
+																	d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"
+																/>
+															</svg>
+															{route.incidentIds.length}
 														</span>
-													{/each}
+													{/if}
+													{#if route.explanationChips[1] && route.explanationChips[1] !== route.trafficSummary}
+														<span
+															class="rounded-full bg-[var(--surface-muted)] px-2 py-1 text-[11px] text-[var(--muted)]"
+														>
+															{route.explanationChips[1]}
+														</span>
+													{/if}
 												</div>
 											</button>
 										{/each}
@@ -1850,39 +1924,33 @@
 							</div>
 						</div>
 
-						<div class="hidden gap-3 lg:grid lg:grid-cols-[250px_minmax(0,1fr)_320px] lg:items-end">
+						<div class="hidden gap-3 lg:grid lg:grid-cols-[280px_minmax(0,1fr)_340px] lg:items-end">
 							<div class="pointer-events-auto space-y-2">
-								{#if profileError}
-									<div class="rounded-[20px] border border-[#b86042]/30 bg-[#b86042]/12 px-4 py-3">
-										<div class="flex items-center justify-between gap-3">
-											<p class="text-sm text-[#ffd9cb]">{profileError}</p>
-											<button
-												type="button"
-												onclick={() => void ensureTrafficProfile()}
-												class="shrink-0 rounded-full border border-white/12 px-3 py-1.5 text-xs font-medium text-white/84 hover:bg-white/[0.08]"
-											>
-												Retry
-											</button>
-										</div>
-									</div>
-								{/if}
 								{#if routeError}
-									<div class="rounded-[20px] bg-[#a44c39]/20 px-4 py-3 text-sm text-[#ffd2c6]">
+									<div
+										class="rounded-[20px] border border-[var(--danger)] bg-[var(--danger-soft)] px-4 py-3 text-sm text-[var(--danger)]"
+									>
 										{routeError}
 									</div>
 								{/if}
 								{#if routeMessage}
-									<div class="rounded-[20px] bg-[#f1deba]/12 px-4 py-3 text-sm text-[#f8e7c4]">
+									<div
+										class="rounded-[20px] border border-[var(--border)] bg-[var(--primary-soft)] px-4 py-3 text-sm text-[var(--text)]"
+									>
 										{routeMessage}
 									</div>
 								{/if}
 								{#if tripError}
-									<div class="rounded-[20px] bg-[#a44c39]/20 px-4 py-3 text-sm text-[#ffd2c6]">
+									<div
+										class="rounded-[20px] border border-[var(--danger)] bg-[var(--danger-soft)] px-4 py-3 text-sm text-[var(--danger)]"
+									>
 										{tripError}
 									</div>
 								{/if}
 								{#if tripMessage}
-									<div class="rounded-[20px] bg-[#7fc7ae]/16 px-4 py-3 text-sm text-[#d9fff2]">
+									<div
+										class="rounded-[20px] border border-[var(--accent-soft)] bg-[var(--accent-soft)] px-4 py-3 text-sm text-[var(--accent)]"
+									>
 										{tripMessage}
 									</div>
 								{/if}
@@ -1890,30 +1958,57 @@
 
 							<div class="pointer-events-auto lg:justify-self-center">
 								<div
-									class="mx-auto max-w-[520px] rounded-[24px] border border-white/10 bg-[rgba(11,13,17,0.9)] p-3 shadow-[0_20px_54px_rgba(0,0,0,0.3)] backdrop-blur-2xl"
+									class="mx-auto flex w-full max-w-[380px] items-center gap-2 rounded-full border border-[var(--border)] bg-[rgba(255,253,248,0.96)] p-2 text-[var(--text)] shadow-[0_20px_54px_rgba(36,31,23,0.16)] backdrop-blur-2xl"
 								>
-									<div class="grid grid-cols-2 gap-2">
-										<button
-											type="button"
-											onclick={beginTrip}
-											disabled={!selectedRoute || tripBusy !== null}
-											class="rounded-[18px] bg-[#55c6ff] px-4 py-2.5 text-sm font-semibold text-[#08141c] disabled:opacity-50"
+									<button
+										type="button"
+										onclick={clearRoutePlan}
+										class="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface)] text-[var(--muted)] hover:border-[var(--border-strong)] hover:bg-[var(--primary-soft)]"
+										aria-label="Close route planner"
+										title="Close route planner"
+									>
+										<svg
+											viewBox="0 0 24 24"
+											class="h-5 w-5"
+											fill="none"
+											stroke="currentColor"
+											stroke-width="2.2"
+											stroke-linecap="round"
+											stroke-linejoin="round"
 										>
-											{tripBusy === 'starting' ? 'Starting...' : 'Start trip'}
-										</button>
-										<button
-											type="button"
-											onclick={markArrived}
-											disabled={true}
-											class="rounded-[18px] border border-white/10 bg-white/[0.06] px-4 py-2.5 text-sm font-semibold text-white/86 disabled:opacity-50"
+											<path d="M18 6 6 18" />
+											<path d="m6 6 12 12" />
+										</svg>
+									</button>
+									<button
+										type="button"
+										onclick={() => void planRoute()}
+										disabled={!routeDestination || routeLoading}
+										class="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface)] text-[var(--muted)] hover:border-[var(--border-strong)] hover:bg-[var(--primary-soft)] disabled:opacity-50"
+										aria-label="Refresh routes"
+										title="Refresh routes"
+									>
+										<svg
+											viewBox="0 0 24 24"
+											class="h-5 w-5"
+											fill="none"
+											stroke="currentColor"
+											stroke-width="2.2"
+											stroke-linecap="round"
+											stroke-linejoin="round"
 										>
-											{tripBusy === 'arriving' ? 'Saving...' : 'Arrived'}
-										</button>
-									</div>
-									<p class="mt-2 text-[11px] leading-4 text-white/50">
-										Tap a route line on the map or a card on the right to switch before starting.
-										During a live trip, the navigation path stays blue above traffic.
-									</p>
+											<path d="M21 12a9 9 0 1 1-2.64-6.36" />
+											<path d="M21 3v6h-6" />
+										</svg>
+									</button>
+									<button
+										type="button"
+										onclick={beginTrip}
+										disabled={!selectedRoute || tripBusy !== null}
+										class="flex-1 rounded-full bg-[var(--primary)] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#5a4229] disabled:opacity-50"
+									>
+										{tripBusy === 'starting' ? 'Starting...' : 'Start trip'}
+									</button>
 								</div>
 							</div>
 						</div>
@@ -1923,7 +2018,7 @@
 		{/if}
 
 		<div
-			class={`pointer-events-none absolute inset-x-0 bottom-0 z-30 px-3 pb-3 sm:px-4 sm:pb-4 ${
+			class={`pointer-events-none absolute inset-x-0 bottom-0 z-30 px-3 pb-3 sm:px-2 sm:pb-3 ${
 				activeTab === 'route' && tripStatus === 'tracking'
 					? 'hidden'
 					: activeTab === 'route' && showRouteHud
@@ -1931,9 +2026,11 @@
 						: ''
 			}`}
 		>
-			<div class="mx-auto flex max-w-[1440px] flex-col items-center gap-3 lg:items-start">
+			<div
+				class="mx-auto flex max-w-[1440px] flex-col items-center gap-3 sm:mx-0 sm:max-w-none lg:items-start"
+			>
 				<div
-					class="pointer-events-auto rounded-full border border-white/10 bg-[rgba(11,13,17,0.9)] p-1 shadow-[0_24px_64px_rgba(0,0,0,0.34)] backdrop-blur-2xl"
+					class="pointer-events-auto rounded-full border border-[var(--border)] bg-[rgba(255,253,248,0.96)] p-1 shadow-[0_24px_64px_rgba(36,31,23,0.16)] backdrop-blur-2xl"
 				>
 					<div class="flex items-center gap-1">
 						{#each dockItems as item (item.id)}
@@ -1942,8 +2039,8 @@
 								aria-current={activeTab === item.id ? 'page' : undefined}
 								class={`rounded-full px-4 py-2.5 text-sm font-medium ${
 									activeTab === item.id
-										? 'bg-[#f1deba] text-[#171717]'
-										: 'text-white/72 hover:bg-white/[0.08]'
+										? 'bg-[var(--surface-muted)] text-[var(--text)]'
+										: 'text-[var(--muted)] hover:bg-[var(--primary-soft)]'
 								}`}
 							>
 								{item.label}
@@ -2069,21 +2166,6 @@
 								</div>
 
 								<div class="space-y-3 p-4">
-									{#if profileError}
-										<div
-											class="flex items-center justify-between gap-3 rounded-[18px] border border-[#b86042]/30 bg-[#b86042]/12 px-4 py-3"
-										>
-											<p class="text-sm text-[#ffd9cb]">{profileError}</p>
-											<button
-												type="button"
-												onclick={() => void ensureTrafficProfile()}
-												class="shrink-0 rounded-full border border-white/12 px-3 py-1.5 text-xs font-medium text-white/84 hover:bg-white/[0.08]"
-											>
-												Retry
-											</button>
-										</div>
-									{/if}
-
 									<div class="flex flex-wrap gap-2">
 										{#each UNIVERSITY_SEEDS as university (university.id)}
 											<button
@@ -2300,236 +2382,103 @@
 					</div>
 				{:else}
 					<div
-						class={`pointer-events-auto w-full max-w-[560px] overflow-hidden rounded-[30px] border shadow-[0_28px_80px_rgba(0,0,0,0.42)] backdrop-blur-2xl transition-all ${
+						class={`pointer-events-auto flex w-full flex-col overflow-hidden backdrop-blur-2xl transition-all ${
 							activeTab === 'pulse'
-								? 'border-black/8 bg-[rgba(248,248,246,0.98)] text-[#141414]'
-								: 'border-white/10 bg-[rgba(11,13,17,0.92)] text-white'
-						} ${drawerExpanded ? 'max-h-[78svh]' : 'max-h-[220px]'}`}
+								? `max-w-[520px] rounded-[32px] border border-black/8 bg-[rgba(249,250,252,0.97)] text-[#141414] shadow-[0_28px_80px_rgba(0,0,0,0.22)] ${
+										drawerExpanded ? 'max-h-[74svh] sm:max-h-[640px]' : 'max-h-[118px]'
+									}`
+								: `max-w-[680px] rounded-[32px] border border-[var(--border)] bg-[linear-gradient(180deg,rgba(255,253,248,0.98)_0%,rgba(247,241,230,0.94)_100%)] text-[var(--text)] shadow-[0_28px_80px_rgba(36,31,23,0.16)] ${
+										drawerExpanded ? 'max-h-[82svh]' : 'max-h-[188px]'
+									}`
+						}`}
 					>
 						<button
 							type="button"
 							onclick={() => (drawerExpanded = !drawerExpanded)}
-							class="flex w-full items-center justify-between px-4 py-3 text-left"
+							class={activeTab === 'pulse'
+								? 'w-full px-5 pt-4 pb-3 text-left'
+								: 'w-full px-4 py-4 text-left sm:px-5'}
 						>
-							<div>
-								<p
-									class={`text-[10px] tracking-[0.28em] uppercase ${
-										activeTab === 'pulse' ? 'text-black/38' : 'text-white/40'
-									}`}
-								>
-									{panelCopy[activeTab].subtitle}
-								</p>
-								<p
-									class={`mt-1 text-lg font-semibold ${
-										activeTab === 'pulse' ? 'text-[#141414]' : 'text-white/92'
-									}`}
-								>
-									{panelCopy[activeTab].title}
-								</p>
-							</div>
-							<span
-								class={`rounded-full px-3 py-1 text-xs ${
-									activeTab === 'pulse'
-										? 'border border-black/8 bg-white text-black/56'
-										: 'bg-white/[0.06] text-white/68'
-								}`}
-							>
-								{drawerExpanded ? 'Collapse' : 'Expand'}
-							</span>
+							{#if activeTab === 'pulse'}
+								<div class="flex flex-col items-center gap-2 pb-1">
+									<div class="h-1.5 w-14 rounded-full bg-black/12"></div>
+									{#if !drawerExpanded}
+										<div
+											class="flex h-12 w-12 items-center justify-center rounded-full bg-white shadow-[0_10px_24px_rgba(0,0,0,0.08)]"
+										>
+											<IncidentTypeIcon type={selectedType} class="h-8 w-8" />
+										</div>
+									{/if}
+								</div>
+							{:else}
+								<div class="flex items-start justify-between gap-4">
+									<div class="min-w-0">
+										<div class="flex items-center gap-3">
+											<div
+												class="flex h-12 w-12 shrink-0 items-center justify-center rounded-[18px] bg-[var(--primary)] text-white shadow-[0_12px_28px_rgba(90,66,41,0.18)]"
+											>
+												<svg
+													viewBox="0 0 24 24"
+													class="h-6 w-6"
+													fill="none"
+													stroke="currentColor"
+													stroke-width="2"
+													stroke-linecap="round"
+													stroke-linejoin="round"
+												>
+													<circle cx="12" cy="8" r="3.5" />
+													<path d="M5 19a7 7 0 0 1 14 0" />
+												</svg>
+											</div>
+											<div class="min-w-0">
+												<div class="flex flex-wrap items-center gap-2">
+													<p class="text-[10px] tracking-[0.28em] text-[var(--muted)] uppercase">
+														Trust and history
+													</p>
+													<span
+														class="rounded-full border border-[var(--border)] bg-white/75 px-2.5 py-1 text-[11px] font-medium text-[var(--muted)]"
+													>
+														{getRoleLabel(meQuery.data?.role)}
+													</span>
+												</div>
+												<p
+													class="mt-1 truncate text-[1.55rem] font-semibold tracking-[-0.04em] text-[var(--text)]"
+												>
+													{meQuery.data?.displayName ?? panelCopy[activeTab].title}
+												</p>
+											</div>
+										</div>
+									</div>
+									<span
+										class="inline-flex shrink-0 items-center gap-2 rounded-full border border-[var(--border)] bg-white/75 px-3 py-1.5 text-xs font-medium text-[var(--muted)]"
+									>
+										{drawerExpanded ? 'Collapse' : 'Expand'}
+										<svg
+											viewBox="0 0 24 24"
+											class={`h-4 w-4 transition-transform ${drawerExpanded ? 'rotate-180' : ''}`}
+											fill="none"
+											stroke="currentColor"
+											stroke-width="2"
+											stroke-linecap="round"
+											stroke-linejoin="round"
+										>
+											<path d="m6 9 6 6 6-6" />
+										</svg>
+									</span>
+								</div>
+							{/if}
 						</button>
 
 						<div
-							class={`border-t px-4 pb-4 ${
-								activeTab === 'pulse' ? 'border-black/8' : 'border-white/8'
+							class={`min-h-0 overflow-y-auto border-t px-4 pb-4 ${
+								activeTab === 'pulse' ? 'border-black/8' : 'border-[var(--border)]'
 							}`}
 						>
-							{#if profileError}
-								<div
-									class={`mt-4 flex items-center justify-between gap-3 rounded-[18px] border px-4 py-3 ${
-										activeTab === 'pulse'
-											? 'border-[#f1b7a4] bg-[#fff0eb]'
-											: 'border-[#b86042]/30 bg-[#b86042]/12'
-									}`}
-								>
-									<p
-										class={`text-sm ${activeTab === 'pulse' ? 'text-[#7d2c1d]' : 'text-[#ffd9cb]'}`}
-									>
-										{profileError}
-									</p>
-									<button
-										type="button"
-										onclick={() => void ensureTrafficProfile()}
-										class={`shrink-0 rounded-full border px-3 py-1.5 text-xs font-medium ${
-											activeTab === 'pulse'
-												? 'border-black/8 bg-white text-black/76 hover:bg-black/[0.03]'
-												: 'border-white/12 text-white/84 hover:bg-white/[0.08]'
-										}`}
-									>
-										Retry
-									</button>
-								</div>
-							{/if}
-
 							{#if activeTab === 'pulse'}
-								<div class="pt-4">
-									<div
-										class="rounded-[26px] border border-black/8 bg-[linear-gradient(180deg,rgba(255,248,239,0.96)_0%,rgba(247,248,250,0.98)_100%)] p-4 shadow-[0_12px_32px_rgba(0,0,0,0.06)]"
-									>
-										<div class="flex flex-wrap items-start justify-between gap-3">
-											<div class="max-w-[28rem]">
-												<p class="text-[10px] tracking-[0.3em] text-black/36 uppercase">
-													Report composer
-												</p>
-												<p
-													class="mt-2 text-[1.45rem] leading-none font-semibold tracking-[-0.05em] text-[#171717]"
-												>
-													Mark the exact spot before you post.
-												</p>
-												<p class="mt-2 text-sm leading-6 text-black/60">
-													Double-click the map on desktop or press and hold on mobile to drop a
-													report pin. Then choose the type and add a short note.
-												</p>
-											</div>
-
-											<div class="grid min-w-[200px] grid-cols-2 gap-2 text-left">
-												<div class="rounded-[18px] border border-black/8 bg-white px-3 py-3">
-													<p class="text-[10px] tracking-[0.24em] text-black/36 uppercase">Live</p>
-													<p class="mt-1 text-xl font-semibold text-[#171717]">
-														{incidents.length}
-													</p>
-													<p class="text-xs text-black/46">reports in the city</p>
-												</div>
-												<div class="rounded-[18px] border border-black/8 bg-white px-3 py-3">
-													<p class="text-[10px] tracking-[0.24em] text-black/36 uppercase">
-														Status
-													</p>
-													<p class="mt-1 text-sm font-semibold text-[#171717]">{locationStatus}</p>
-													<p class="text-xs text-black/46">map pinning enabled</p>
-												</div>
-											</div>
-										</div>
-									</div>
-
-									<div
-										class="mt-4 rounded-[24px] border border-black/8 bg-white p-3 shadow-[0_10px_24px_rgba(0,0,0,0.04)]"
-									>
-										<div class="flex items-start justify-between gap-3">
-											<div class="min-w-0">
-												<p class="text-[10px] tracking-[0.28em] text-black/36 uppercase">
-													Location
-												</p>
-												<p class="mt-2 text-lg font-semibold tracking-[-0.04em] text-[#171717]">
-													{reportLocationLabel}
-												</p>
-												<p class="mt-1 text-sm leading-6 text-black/58">{reportLocationDetail}</p>
-											</div>
-											<span
-												class={`shrink-0 rounded-full px-3 py-1 text-xs font-semibold ${
-													reportLocation
-														? 'bg-[#ffede5] text-[#7f2e10]'
-														: 'border border-black/8 bg-[#f5f5f2] text-black/56'
-												}`}
-											>
-												{reportLocation ? 'Ready' : 'Waiting'}
-											</span>
-										</div>
-
-										<div class="mt-3 flex flex-wrap gap-2 text-xs text-black/56">
-											<span class="rounded-full border border-black/8 bg-[#f5f5f2] px-2.5 py-1">
-												{reportLocationDistance ?? 'Select a spot to preview distance'}
-											</span>
-											<span class="rounded-full border border-black/8 bg-[#f5f5f2] px-2.5 py-1">
-												{reportLocationMode === 'gps'
-													? 'Using your live GPS'
-													: reportLocation
-														? 'Pinned manually on the map'
-														: 'No report location chosen yet'}
-											</span>
-										</div>
-
-										<div class="mt-4 flex flex-wrap gap-2">
-											<button
-												type="button"
-												onclick={useLiveLocationForReport}
-												class="rounded-full border border-black/8 bg-white px-3.5 py-2 text-sm font-medium text-black/78 hover:bg-black/[0.03]"
-											>
-												Use live location
-											</button>
-											<button
-												type="button"
-												onclick={clearReportLocation}
-												disabled={!reportLocation}
-												class="rounded-full border border-black/8 bg-[#f5f5f2] px-3.5 py-2 text-sm font-medium text-black/62 hover:bg-black/[0.03] disabled:opacity-45"
-											>
-												Clear pin
-											</button>
-										</div>
-									</div>
-
-									<div class="mt-4">
-										<p class="text-[10px] tracking-[0.28em] text-black/36 uppercase">Type</p>
-										<div class="mt-3 flex gap-2 overflow-x-auto pb-1">
-											{#each INCIDENT_TYPES as incidentType (incidentType)}
-												<button
-													type="button"
-													onclick={() => (selectedType = incidentType)}
-													class={`shrink-0 rounded-full border px-3 py-2 text-sm font-medium transition ${
-														selectedType === incidentType
-															? 'border-[#ffd4ba] bg-[#fff1e6] text-[#171717] shadow-[0_8px_20px_rgba(255,133,72,0.16)]'
-															: 'border-black/8 bg-white text-black/70'
-													}`}
-												>
-													{INCIDENT_LABELS[incidentType].en}
-												</button>
-											{/each}
-										</div>
-									</div>
-
-									<div
-										class="mt-4 rounded-[24px] border border-black/8 bg-white p-3 shadow-[0_10px_24px_rgba(0,0,0,0.04)]"
-									>
-										<div class="flex items-center justify-between gap-3">
-											<div>
-												<p class="text-[10px] tracking-[0.28em] text-black/36 uppercase">Note</p>
-												<p class="mt-1 text-sm text-black/58">
-													Add a useful detail for nearby drivers.
-												</p>
-											</div>
-											<span
-												class="rounded-full border border-black/8 bg-[#f5f5f2] px-2.5 py-1 text-xs text-black/50"
-											>
-												{reportNote.length}/120
-											</span>
-										</div>
-
-										<textarea
-											bind:value={reportNote}
-											maxlength="120"
-											rows="3"
-											class="mt-3 min-h-[104px] w-full resize-none rounded-[20px] border border-black/8 bg-[#fbfbf9] px-4 py-3 text-sm leading-6 text-[#171717] outline-none placeholder:text-black/34 focus:border-[#ffd4ba]"
-											placeholder={`Example: ${INCIDENT_LABELS[selectedType].en.toLowerCase()} is blocking one lane, slow traffic near the intersection.`}
-										></textarea>
-
-										<div
-											class="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"
-										>
-											<p class="text-xs text-black/48">
-												Reports work best when the pin is exact and the note is specific.
-											</p>
-											<button
-												type="button"
-												onclick={submitIncident}
-												disabled={reportSubmitting || profileState === 'loading' || !reportLocation}
-												class="rounded-[18px] bg-[#f4d5be] px-4 py-3 text-sm font-semibold text-[#171717] shadow-[0_14px_26px_rgba(241,222,186,0.16)] hover:bg-[#ead19f] disabled:opacity-50"
-											>
-												{reportSubmitting ? 'Publishing...' : 'Publish report'}
-											</button>
-										</div>
-									</div>
-
+								<div class="px-1 pt-3 pb-4">
 									{#if reportError}
 										<div
-											class="mt-3 rounded-[18px] border border-[#f1b7a4] bg-[#fff0eb] px-4 py-3 text-sm text-[#7d2c1d]"
+											class="mb-3 rounded-[16px] border border-[#f1b7a4] bg-[#fff0eb] px-3 py-2 text-xs font-medium text-[#7d2c1d]"
 										>
 											{reportError}
 										</div>
@@ -2537,156 +2486,220 @@
 
 									{#if reportFeedback}
 										<div
-											class="mt-3 rounded-[18px] border border-[#b7e6d4] bg-[#eefbf5] px-4 py-3 text-sm text-[#155544]"
+											class="mb-3 rounded-[16px] border border-[#b7e6d4] bg-[#eefbf5] px-3 py-2 text-xs font-medium text-[#155544]"
 										>
 											{reportFeedback}
 										</div>
 									{/if}
 
-									<div class="mt-4 space-y-2">
-										<div class="flex items-center justify-between gap-3">
-											<div>
-												<p class="text-[10px] tracking-[0.28em] text-black/36 uppercase">
-													Live feed
-												</p>
-												<p class="mt-1 text-sm text-black/58">
-													Recent reports from riders around Phnom Penh.
-												</p>
-											</div>
-											<span
-												class="rounded-full border border-black/8 bg-[#f5f5f2] px-3 py-1 text-xs text-black/58"
+									<div class="grid grid-cols-3 gap-3">
+										{#each INCIDENT_TYPES as incidentType (incidentType)}
+											<button
+												type="button"
+												aria-label={`Report ${INCIDENT_LABELS[incidentType].en}`}
+												title={INCIDENT_LABELS[incidentType].en}
+												onclick={() => void submitIncident(incidentType)}
+												disabled={reportSubmitting}
+												class={`flex items-center justify-center rounded-[26px] p-2.5 transition ${
+													selectedType === incidentType
+														? 'bg-[#eef6ff] ring-2 ring-[#1e88f7] ring-offset-2 ring-offset-[#f8fafc]'
+														: 'bg-transparent'
+												} disabled:opacity-50`}
 											>
-												{visibleIncidents.length} shown
-											</span>
-										</div>
-
-										{#if incidentsQuery.isLoading}
-											<div
-												class="rounded-[20px] border border-black/8 bg-white px-4 py-3 text-sm text-black/58"
-											>
-												Loading live reports...
-											</div>
-										{:else if visibleIncidents.length === 0}
-											<div
-												class="rounded-[20px] border border-black/8 bg-white px-4 py-3 text-sm text-black/58"
-											>
-												No active incidents right now. Your next report will appear here.
-											</div>
-										{:else}
-											{#each visibleIncidents as incident (incident._id)}
-												<div
-													class="rounded-[22px] border border-black/8 bg-white px-4 py-3.5 shadow-[0_8px_20px_rgba(0,0,0,0.03)]"
+												<span
+													class={`flex h-[80px] w-[80px] items-center justify-center rounded-full border sm:h-[88px] sm:w-[88px] ${
+														selectedType === incidentType
+															? 'border-[#1e88f7] bg-white shadow-[0_12px_30px_rgba(30,136,247,0.18)]'
+															: 'border-black/6 bg-white shadow-[0_10px_28px_rgba(17,24,39,0.06)]'
+													}`}
 												>
-													<div class="flex items-start justify-between gap-3">
-														<div class="min-w-0 flex-1">
-															<div class="flex flex-wrap items-center gap-2">
-																<span
-																	class={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${getIncidentAccentClass(incident.type)}`}
-																>
-																	{INCIDENT_LABELS[incident.type].en}
-																</span>
-																<span class="text-xs text-black/42">
-																	{formatRelativeTime(incident.createdAt)}
-																</span>
-															</div>
-															<p class="mt-2 text-sm font-medium text-[#171717]">
-																{INCIDENT_LABELS[incident.type].en}
-															</p>
-															<p class="mt-1 text-sm leading-6 text-black/55">
-																{incident.description ?? 'No note attached.'}
-															</p>
-														</div>
-
-														{#if activeIncidentIds.has(incident._id)}
-															<span
-																class="shrink-0 rounded-full border border-black/8 bg-[#f5f5f2] px-3 py-1.5 text-xs font-medium text-black/62"
-															>
-																Your report
-															</span>
-														{:else}
-															<button
-																type="button"
-																onclick={() => confirmIncident(incident._id)}
-																disabled={incidentActionId === incident._id}
-																class="shrink-0 rounded-full border border-black/8 bg-white px-3 py-1.5 text-xs font-medium text-black/82 hover:bg-black/[0.03] disabled:opacity-50"
-															>
-																{incidentActionId === incident._id ? 'Saving...' : 'Confirm'}
-															</button>
-														{/if}
-													</div>
-
-													<div class="mt-3 flex flex-wrap gap-2 text-xs text-black/54">
-														<span
-															class="rounded-full border border-black/8 bg-[#f5f5f2] px-2.5 py-1"
-														>
-															{Math.round(incident.confidenceScore * 100)}% confidence
-														</span>
-														<span
-															class="rounded-full border border-black/8 bg-[#f5f5f2] px-2.5 py-1"
-														>
-															{currentLocation
-																? formatCompactDistance(
-																		haversineMeters(currentLocation, incident.location)
-																	)
-																: `${incident.location.lat.toFixed(3)}, ${incident.location.lng.toFixed(3)}`}
-														</span>
-														<span
-															class="rounded-full border border-black/8 bg-[#f5f5f2] px-2.5 py-1"
-														>
-															{incident.location.lat.toFixed(3)}, {incident.location.lng.toFixed(3)}
-														</span>
-													</div>
-												</div>
-											{/each}
-										{/if}
+													<IncidentTypeIcon type={incidentType} class="h-10 w-10 sm:h-12 sm:w-12" />
+												</span>
+											</button>
+										{/each}
 									</div>
 								</div>
 							{:else}
 								<div class="pt-4">
-									<div class="grid grid-cols-3 gap-2">
-										<div class="rounded-[18px] bg-white/[0.05] px-3 py-3">
-											<p class="text-[10px] tracking-[0.24em] text-white/40 uppercase">Trust</p>
-											<p class="mt-1 text-xl font-semibold text-white/90">
-												{meQuery.data?.trustScore?.toFixed(1) ?? '2.0'}
-											</p>
+									<div class="grid gap-3 sm:grid-cols-3">
+										<div
+											class="rounded-[24px] border border-[var(--border)] bg-white/80 px-4 py-4 shadow-[0_12px_30px_rgba(36,31,23,0.08)]"
+										>
+											<div class="flex items-center gap-3">
+												<div
+													class="flex h-10 w-10 items-center justify-center rounded-[14px] bg-[var(--surface-muted)] text-[var(--primary)]"
+												>
+													<svg
+														viewBox="0 0 24 24"
+														class="h-5 w-5"
+														fill="none"
+														stroke="currentColor"
+														stroke-width="2"
+														stroke-linecap="round"
+														stroke-linejoin="round"
+													>
+														<path d="M12 3 4 7v5c0 5 3.4 8.8 8 10 4.6-1.2 8-5 8-10V7l-8-4Z" />
+														<path d="m9.5 12 1.8 1.8 3.7-4.3" />
+													</svg>
+												</div>
+												<div>
+													<p class="text-[10px] tracking-[0.24em] text-[var(--muted)] uppercase">
+														Trust
+													</p>
+													<p
+														class="mt-1 text-2xl font-semibold tracking-[-0.04em] text-[var(--text)]"
+													>
+														{meQuery.data?.trustScore?.toFixed(1) ?? '2.0'}
+													</p>
+												</div>
+											</div>
 										</div>
-										<div class="rounded-[18px] bg-white/[0.05] px-3 py-3">
-											<p class="text-[10px] tracking-[0.24em] text-white/40 uppercase">Reports</p>
-											<p class="mt-1 text-xl font-semibold text-white/90">
-												{meQuery.data?.reportsCount ?? 0}
-											</p>
+										<div
+											class="rounded-[24px] border border-[var(--border)] bg-white/80 px-4 py-4 shadow-[0_12px_30px_rgba(36,31,23,0.08)]"
+										>
+											<div class="flex items-center gap-3">
+												<div
+													class="flex h-10 w-10 items-center justify-center rounded-[14px] bg-[var(--surface-muted)] text-[var(--primary)]"
+												>
+													<svg
+														viewBox="0 0 24 24"
+														class="h-5 w-5"
+														fill="none"
+														stroke="currentColor"
+														stroke-width="2"
+														stroke-linecap="round"
+														stroke-linejoin="round"
+													>
+														<path d="M12 3v18" />
+														<path d="M3 12h18" />
+													</svg>
+												</div>
+												<div>
+													<p class="text-[10px] tracking-[0.24em] text-[var(--muted)] uppercase">
+														Reports
+													</p>
+													<p
+														class="mt-1 text-2xl font-semibold tracking-[-0.04em] text-[var(--text)]"
+													>
+														{meQuery.data?.reportsCount ?? 0}
+													</p>
+												</div>
+											</div>
 										</div>
-										<div class="rounded-[18px] bg-white/[0.05] px-3 py-3">
-											<p class="text-[10px] tracking-[0.24em] text-white/40 uppercase">Confirm</p>
-											<p class="mt-1 text-xl font-semibold text-white/90">
-												{meQuery.data?.confirmedCount ?? 0}
-											</p>
+										<div
+											class="rounded-[24px] border border-[var(--border)] bg-white/80 px-4 py-4 shadow-[0_12px_30px_rgba(36,31,23,0.08)]"
+										>
+											<div class="flex items-center gap-3">
+												<div
+													class="flex h-10 w-10 items-center justify-center rounded-[14px] bg-[var(--surface-muted)] text-[var(--primary)]"
+												>
+													<svg
+														viewBox="0 0 24 24"
+														class="h-5 w-5"
+														fill="none"
+														stroke="currentColor"
+														stroke-width="2"
+														stroke-linecap="round"
+														stroke-linejoin="round"
+													>
+														<path d="M5 13l4 4L19 7" />
+													</svg>
+												</div>
+												<div>
+													<p class="text-[10px] tracking-[0.24em] text-[var(--muted)] uppercase">
+														Confirmed
+													</p>
+													<p
+														class="mt-1 text-2xl font-semibold tracking-[-0.04em] text-[var(--text)]"
+													>
+														{meQuery.data?.confirmedCount ?? 0}
+													</p>
+												</div>
+											</div>
 										</div>
 									</div>
 
 									{#if drawerExpanded}
-										<div class="mt-4 space-y-2">
+										<div class="mt-4 space-y-3">
 											<a
 												href={resolve('/app/proof')}
-												class="block rounded-[20px] bg-white/[0.05] px-4 py-3 text-sm font-medium text-white/88"
+												class="flex items-center justify-between gap-3 border border-[var(--border)] bg-[var(--surface)] px-4 py-4 text-[var(--text)]"
 											>
-												Open delay proof
-											</a>
-											{#if myIncidents.length === 0}
-												<div class="rounded-[20px] bg-white/[0.04] px-4 py-3 text-sm text-white/58">
-													No incident history yet.
-												</div>
-											{:else}
-												{#each myIncidents.slice(0, 4) as incident (incident._id)}
-													<div class="rounded-[20px] bg-white/[0.04] px-4 py-3">
-														<p class="text-sm font-medium text-white/88">
-															{INCIDENT_LABELS[incident.type].en}
+												<div class="flex min-w-0 items-center gap-3">
+													<div
+														class="flex h-10 w-10 shrink-0 items-center justify-center bg-[var(--surface-muted)] text-[var(--primary)]"
+													>
+														<svg
+															viewBox="0 0 24 24"
+															class="h-5 w-5"
+															fill="none"
+															stroke="currentColor"
+															stroke-width="2"
+															stroke-linecap="round"
+															stroke-linejoin="round"
+														>
+															<path
+																d="M7 4.5h7l3 3V19a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6.5a2 2 0 0 1 2-2Z"
+															/>
+															<path d="M14 4.5V8h3" />
+															<path d="M8 12h8" />
+															<path d="M8 16h5" />
+														</svg>
+													</div>
+													<div class="min-w-0">
+														<p class="text-sm font-semibold text-[var(--text)]">
+															Open proof center
 														</p>
-														<p class="mt-1 text-sm text-white/55">
-															{(incident.confidenceScore * 100).toFixed(0)}% confidence
+														<p class="text-sm text-[var(--muted)]">
+															Issue and download certificates
 														</p>
 													</div>
-												{/each}
+												</div>
+												<svg
+													viewBox="0 0 24 24"
+													class="h-4 w-4 shrink-0 text-[var(--muted)]"
+													fill="none"
+													stroke="currentColor"
+													stroke-width="2"
+													stroke-linecap="round"
+													stroke-linejoin="round"
+												>
+													<path d="M5 12h14" />
+													<path d="m13 5 7 7-7 7" />
+												</svg>
+											</a>
+
+											{#if myIncidents.length === 0}
+												<p
+													class="border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-sm text-[var(--muted)]"
+												>
+													No recent reports.
+												</p>
+											{:else}
+												<div class="border border-[var(--border)] bg-[var(--surface)]">
+													<div class="border-b border-[var(--border)] px-4 py-3">
+														<p class="text-sm font-semibold text-[var(--text)]">Recent reports</p>
+													</div>
+													<div class="divide-y divide-[var(--border)]">
+														{#each myIncidents.slice(0, 3) as incident (incident._id)}
+															<div class="flex items-center justify-between gap-3 px-4 py-3">
+																<div class="min-w-0">
+																	<p class="truncate text-sm font-medium text-[var(--text)]">
+																		{INCIDENT_LABELS[incident.type].en}
+																	</p>
+																	<p class="text-sm text-[var(--muted)]">
+																		{formatShortDate(incident.createdAt)}
+																	</p>
+																</div>
+																<span
+																	class={`shrink-0 px-2 py-1 text-[11px] font-semibold ${getIncidentStatusClass(incident.status)}`}
+																>
+																	{incident.status === 'active' ? 'Active' : 'Expired'}
+																</span>
+															</div>
+														{/each}
+													</div>
+												</div>
 											{/if}
 										</div>
 									{/if}

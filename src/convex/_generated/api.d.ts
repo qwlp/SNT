@@ -10,6 +10,7 @@
 
 import type * as authed_helpers from '../authed/helpers.js';
 import type * as authed_incidents from '../authed/incidents.js';
+import type * as authed_routes from '../authed/routes.js';
 import type * as authed_shortcuts from '../authed/shortcuts.js';
 import type * as authed_users from '../authed/users.js';
 import type * as private_helpers from '../private/helpers.js';
@@ -24,6 +25,7 @@ import type { ApiFromModules, FilterApi, FunctionReference } from 'convex/server
 declare const fullApi: ApiFromModules<{
 	'authed/helpers': typeof authed_helpers;
 	'authed/incidents': typeof authed_incidents;
+	'authed/routes': typeof authed_routes;
 	'authed/shortcuts': typeof authed_shortcuts;
 	'authed/users': typeof authed_users;
 	'private/helpers': typeof private_helpers;
