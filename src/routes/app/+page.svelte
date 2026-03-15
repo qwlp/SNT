@@ -790,16 +790,13 @@
 	<div class="min-h-[100svh] bg-[#f7f7f4]">
 		<div class="mx-auto flex min-h-[100svh] max-w-md items-center justify-center px-4 py-8 sm:px-6">
 			<div
-				class="w-full border border-black/8 bg-white p-6 shadow-[0_24px_64px_rgba(17,17,17,0.06)] sm:p-8"
-			>
-				<div
-					{@attach (element) => {
-						clerkContext.clerk.mountSignIn(element, {
-							appearance: minimalClerkAppearance
-						});
-					}}
-				></div>
-			</div>
+				class="w-full"
+				{@attach (element) => {
+					clerkContext.clerk.mountSignIn(element, {
+						appearance: minimalClerkAppearance
+					});
+				}}
+			></div>
 		</div>
 	</div>
 {:else}

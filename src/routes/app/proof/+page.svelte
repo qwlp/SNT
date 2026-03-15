@@ -71,9 +71,7 @@
 
 {#if !clerkContext.clerk.user}
 	<div class="min-h-screen bg-[var(--canvas)] px-4 py-8 sm:px-6 lg:px-8">
-		<div
-			class="mx-auto max-w-md border border-black/8 bg-white p-6 text-[var(--text)] shadow-[0_20px_48px_rgba(17,17,17,0.06)]"
-		>
+		<div class="mx-auto max-w-md">
 			<div
 				{@attach (element) => {
 					clerkContext.clerk.mountSignIn(element, {
