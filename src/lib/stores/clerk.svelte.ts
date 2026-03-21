@@ -1,5 +1,6 @@
 import { Clerk } from '@clerk/clerk-js';
 import { env } from '$env/dynamic/public';
+import { createGuestSession } from '$lib/remote/auth.remote';
 import { createContext, onMount } from 'svelte';
 import { ui } from '@clerk/ui';
 
@@ -23,6 +24,7 @@ const resolveClerkPublishableKey = () =>
 class ClerkStore {
 	isClerkLoaded = $state(false);
 	clerk: Clerk;
+	isBootstrappingGuest = $state(false);
 	currentOrganization = $state<EmittedOrganization | null>(null);
 	currentSession = $state<EmittedSession | null>(null);
 	currentUser = $state<EmittedUser | null>(null);
@@ -56,6 +58,19 @@ class ClerkStore {
 			};
 		});
 
+		$effect(() => {
+			if (
+				!this.isClerkLoaded ||
+				this.currentSession ||
+				this.currentUser ||
+				this.isBootstrappingGuest
+			) {
+				return;
+			}
+
+			void this.ensureGuestSession();
+		});
+
 		onMount(async () => {
 			try {
 				await this.clerk.load({
@@ -64,6 +79,8 @@ class ClerkStore {
 					signInForceRedirectUrl: '/app',
 					signUpForceRedirectUrl: '/app'
 				});
+
+				await this.ensureGuestSession();
 				this.isClerkLoaded = true;
 			} catch (error) {
 				console.error('Error loading Clerk', error);
@@ -71,6 +88,34 @@ class ClerkStore {
 				this.isClerkLoaded = true;
 			}
 		});
+	}
+
+	private async ensureGuestSession() {
+		if (this.currentSession || this.currentUser || this.isBootstrappingGuest) {
+			return;
+		}
+
+		this.isBootstrappingGuest = true;
+
+		try {
+			const ticket = await createGuestSession({});
+			const signIn = await this.clerk.client?.signIn.create({
+				strategy: 'ticket',
+				ticket
+			});
+
+			if (!signIn?.createdSessionId) {
+				throw new Error('Clerk did not return a session for the guest sign-in ticket.');
+			}
+
+			await this.clerk.setActive({
+				session: signIn.createdSessionId
+			});
+		} catch (error) {
+			console.error('Error starting guest session', error);
+		} finally {
+			this.isBootstrappingGuest = false;
+		}
 	}
 }
 

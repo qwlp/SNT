@@ -4,7 +4,6 @@
 	import { onDestroy } from 'svelte';
 	import { useConvexClient, useQuery } from 'convex-svelte';
 	import { makeFunctionReference, type FunctionReference } from 'convex/server';
-	import { minimalClerkAppearance } from '$lib/auth/clerkAppearance';
 	import MapSurface from '$lib/components/MapSurface.svelte';
 	import IncidentTypeIcon from '$lib/components/IncidentTypeIcon.svelte';
 	import { getClerkContext } from '$lib/stores/clerk.svelte';
@@ -790,13 +789,15 @@
 	<div class="min-h-[100svh] bg-[#f7f7f4]">
 		<div class="mx-auto flex min-h-[100svh] max-w-md items-center justify-center px-4 py-8 sm:px-6">
 			<div
-				class="w-full"
-				{@attach (element) => {
-					clerkContext.clerk.mountSignIn(element, {
-						appearance: minimalClerkAppearance
-					});
-				}}
-			></div>
+				class="w-full border border-black/8 bg-white p-8 shadow-[0_24px_64px_rgba(17,17,17,0.08)]"
+			>
+				<p class="text-[2rem] leading-tight font-semibold tracking-[-0.03em] text-[#111111]">
+					Entering demo
+				</p>
+				<p class="mt-3 text-base leading-7 text-[#5f5f5f]">
+					Starting an anonymous guest session for this app demo.
+				</p>
+			</div>
 		</div>
 	</div>
 {:else}

@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
-	import { minimalClerkAppearance } from '$lib/auth/clerkAppearance';
 	import AppNavigation from '$lib/components/AppNavigation.svelte';
 	import { getClerkContext } from '$lib/stores/clerk.svelte';
 	import { trafficDashboard, requestProof } from '$lib/remote/traffic.remote';
@@ -69,16 +68,15 @@
 	};
 </script>
 
-{#if !clerkContext.clerk.user}
+{#if !clerkContext.currentUser}
 	<div class="min-h-screen bg-[var(--canvas)] px-4 py-8 sm:px-6 lg:px-8">
 		<div class="mx-auto max-w-md">
-			<div
-				{@attach (element) => {
-					clerkContext.clerk.mountSignIn(element, {
-						appearance: minimalClerkAppearance
-					});
-				}}
-			></div>
+			<div class="border border-[var(--border)] bg-[var(--surface)] p-6">
+				<p class="text-xl font-semibold text-[var(--text)]">Entering demo</p>
+				<p class="mt-2 text-sm text-[var(--muted)]">
+					Starting an anonymous guest session for the proof dashboard.
+				</p>
+			</div>
 		</div>
 	</div>
 {:else}
