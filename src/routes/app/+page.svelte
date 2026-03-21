@@ -794,9 +794,15 @@
 				<p class="text-[2rem] leading-tight font-semibold tracking-[-0.03em] text-[#111111]">
 					Entering demo
 				</p>
-				<p class="mt-3 text-base leading-7 text-[#5f5f5f]">
-					Starting an anonymous guest session for this app demo.
-				</p>
+				{#if clerkContext.guestBootstrapFailed}
+					<p class="mt-3 text-base leading-7 text-[#8a2f1a]">
+						{clerkContext.guestBootstrapFailed}
+					</p>
+				{:else}
+					<p class="mt-3 text-base leading-7 text-[#5f5f5f]">
+						Starting an anonymous guest session for this app demo.
+					</p>
+				{/if}
 			</div>
 		</div>
 	</div>

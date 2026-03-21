@@ -25,6 +25,7 @@ class ClerkStore {
 	isClerkLoaded = $state(false);
 	clerk: Clerk;
 	isBootstrappingGuest = $state(false);
+	guestBootstrapFailed = $state<string | null>(null);
 	currentOrganization = $state<EmittedOrganization | null>(null);
 	currentSession = $state<EmittedSession | null>(null);
 	currentUser = $state<EmittedUser | null>(null);
@@ -63,7 +64,8 @@ class ClerkStore {
 				!this.isClerkLoaded ||
 				this.currentSession ||
 				this.currentUser ||
-				this.isBootstrappingGuest
+				this.isBootstrappingGuest ||
+				this.guestBootstrapFailed
 			) {
 				return;
 			}
@@ -96,6 +98,7 @@ class ClerkStore {
 		}
 
 		this.isBootstrappingGuest = true;
+		this.guestBootstrapFailed = null;
 
 		try {
 			const ticket = await createGuestSession({});
@@ -112,6 +115,8 @@ class ClerkStore {
 				session: signIn.createdSessionId
 			});
 		} catch (error) {
+			this.guestBootstrapFailed =
+				error instanceof Error ? error.message : 'Unable to start the anonymous demo session.';
 			console.error('Error starting guest session', error);
 		} finally {
 			this.isBootstrappingGuest = false;

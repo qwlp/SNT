@@ -24,9 +24,41 @@ export class ClerkService extends ServiceMap.Service<ClerkService, ClerkDef>()('
 			publishableKey: publicEnv.PUBLIC_CLERK_PUBLISHABLE_KEY ?? ''
 		});
 
+		const getClerkCauseMessage = (cause: unknown, fallback: string) => {
+			if (cause && typeof cause === 'object' && 'errors' in cause && Array.isArray(cause.errors)) {
+				const details = cause.errors
+					.map((error) => {
+						if (!error || typeof error !== 'object') {
+							return null;
+						}
+
+						const message =
+							'longMessage' in error && typeof error.longMessage === 'string'
+								? error.longMessage
+								: 'message' in error && typeof error.message === 'string'
+									? error.message
+									: null;
+						const code = 'code' in error && typeof error.code === 'string' ? error.code : null;
+
+						if (!message && !code) {
+							return null;
+						}
+
+						return code ? `${code}: ${message ?? 'Clerk request failed.'}` : message;
+					})
+					.filter((value): value is string => Boolean(value));
+
+				if (details.length > 0) {
+					return details.join(' | ');
+				}
+			}
+
+			return cause instanceof Error ? cause.message : fallback;
+		};
+
 		const createClerkError = (kind: string, cause: unknown, fallback = 'Unknown error') =>
 			new ClerkError({
-				message: cause instanceof Error ? cause.message : fallback,
+				message: getClerkCauseMessage(cause, fallback),
 				kind,
 				traceId: crypto.randomUUID(),
 				timestamp: Date.now(),
@@ -70,7 +102,7 @@ export class ClerkService extends ServiceMap.Service<ClerkService, ClerkDef>()('
 						clerk.users.createUser({
 							firstName: 'Demo',
 							lastName: 'Guest',
-							emailAddress: [`demo+${guestId}@guest.snt.local`],
+							emailAddress: [`demo+${guestId}@example.com`],
 							skipPasswordRequirement: true,
 							skipPasswordChecks: true,
 							skipLegalChecks: true,

@@ -73,9 +73,13 @@
 		<div class="mx-auto max-w-md">
 			<div class="border border-[var(--border)] bg-[var(--surface)] p-6">
 				<p class="text-xl font-semibold text-[var(--text)]">Entering demo</p>
-				<p class="mt-2 text-sm text-[var(--muted)]">
-					Starting an anonymous guest session for the proof dashboard.
-				</p>
+				{#if clerkContext.guestBootstrapFailed}
+					<p class="mt-2 text-sm text-[var(--danger)]">{clerkContext.guestBootstrapFailed}</p>
+				{:else}
+					<p class="mt-2 text-sm text-[var(--muted)]">
+						Starting an anonymous guest session for the proof dashboard.
+					</p>
+				{/if}
 			</div>
 		</div>
 	</div>
