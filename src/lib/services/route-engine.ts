@@ -2,6 +2,11 @@ import { Effect } from 'effect';
 import { api } from '../../convex/_generated/api';
 import type { Doc } from '../../convex/_generated/dataModel';
 import { INCIDENT_LABELS, INCIDENT_ROUTE_PENALTY, type GeoPoint } from '$lib/domain/traffic';
+import {
+	DEFAULT_ROUTING_PREFERENCES,
+	normalizeRoutingPreferences,
+	type RoutingPreferences
+} from '$lib/domain/routing';
 import { ConvexPrivateService } from '$lib/services/convex';
 import {
 	boundsFromPoints,
@@ -10,6 +15,7 @@ import {
 	expandBounds
 } from './geo';
 import { fetchDirections, type ProviderRoute } from './mapbox';
+import { applyRoutingPreferences } from './route-personalization';
 
 export interface RankedRoute {
 	routeId: string;
@@ -19,6 +25,8 @@ export interface RankedRoute {
 	distanceMeters: number;
 	durationSec: number;
 	adjustedScore: number;
+	estimatedFuelLiters: number;
+	estimatedTollCostUsd: number;
 	explanationChips: string[];
 	incidentIds: Doc<'incidents'>['_id'][];
 	shortcutIds: Doc<'shortcutSegments'>['_id'][];
@@ -87,15 +95,18 @@ const findRouteShortcuts = (route: ProviderRoute, shortcuts: Doc<'shortcutSegmen
 
 export const requestRankedRoutes = ({
 	origin,
-	destination
+	destination,
+	preferences = DEFAULT_ROUTING_PREFERENCES
 }: {
 	origin: GeoPoint;
 	destination: GeoPoint;
+	preferences?: RoutingPreferences;
 }) =>
 	Effect.gen(function* () {
 		const convex = yield* ConvexPrivateService;
 		const viewport = expandBounds(boundsFromPoints([origin, destination]), 0.025);
 		const startedAt = Date.now();
+		const normalizedPreferences = normalizeRoutingPreferences(preferences);
 
 		yield* convex.mutation({
 			func: api.private.incidents.expireStale,
@@ -117,7 +128,7 @@ export const requestRankedRoutes = ({
 				args: {}
 			}),
 			Effect.tryPromise({
-				try: () => fetchDirections({ origin, destination }),
+				try: () => fetchDirections({ origin, destination, preferences: normalizedPreferences }),
 				catch: (cause) =>
 					cause instanceof Error ? cause : new Error('Failed to request Mapbox directions')
 			})
@@ -127,7 +138,16 @@ export const requestRankedRoutes = ({
 			.map((route: ProviderRoute, index: number) => {
 				const incidentMatch = findRouteIncidents(route, incidents);
 				const shortcutMatch = findRouteShortcuts(route, shortcuts);
-				const adjustedScore = route.durationSec + incidentMatch.penalty - shortcutMatch.bonus;
+				const preferenceMatch = applyRoutingPreferences({
+					baseDurationSec: route.durationSec,
+					distanceMeters: route.distanceMeters,
+					incidentPenalty: incidentMatch.penalty,
+					shortcutBonus: shortcutMatch.bonus,
+					shortcutCount: shortcutMatch.shortcutIds.length,
+					metrics: route.metrics,
+					preferences: normalizedPreferences,
+					generatedAt: startedAt
+				});
 
 				return {
 					routeId: `route-${index + 1}`,
@@ -136,9 +156,15 @@ export const requestRankedRoutes = ({
 					geometry: route.geometry,
 					distanceMeters: route.distanceMeters,
 					durationSec: route.durationSec,
-					adjustedScore,
+					adjustedScore: preferenceMatch.adjustedScore,
+					estimatedFuelLiters: preferenceMatch.estimatedFuelLiters,
+					estimatedTollCostUsd: preferenceMatch.estimatedTollCostUsd,
 					explanationChips: [
-						...new Set([...incidentMatch.explanationChips, ...shortcutMatch.explanationChips])
+						...new Set([
+							...preferenceMatch.personalizationChips,
+							...incidentMatch.explanationChips,
+							...shortcutMatch.explanationChips
+						])
 					],
 					incidentIds: incidentMatch.incidentIds,
 					shortcutIds: shortcutMatch.shortcutIds

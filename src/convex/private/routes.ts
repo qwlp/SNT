@@ -15,9 +15,31 @@ const routeOptionValidator = v.object({
 	distanceMeters: v.number(),
 	durationSec: v.number(),
 	adjustedScore: v.number(),
+	estimatedFuelLiters: v.number(),
+	estimatedTollCostUsd: v.number(),
 	explanationChips: v.array(v.string()),
 	incidentIds: v.array(v.id('incidents')),
 	shortcutIds: v.array(v.id('shortcutSegments'))
+});
+
+const routingPreferencesValidator = v.object({
+	avoidHighways: v.boolean(),
+	avoidUTurns: v.boolean(),
+	preferWellLitStreets: v.boolean(),
+	preferFewerTurns: v.boolean(),
+	mode: v.union(
+		v.literal('car'),
+		v.literal('scooter'),
+		v.literal('bike'),
+		v.literal('pedestrian'),
+		v.literal('heavy_vehicle')
+	),
+	costPriority: v.union(
+		v.literal('balanced'),
+		v.literal('fastest'),
+		v.literal('lowest_tolls'),
+		v.literal('lowest_fuel')
+	)
 });
 
 export const createSession = privateMutation({
@@ -30,6 +52,7 @@ export const createSession = privateMutation({
 		alternativeRoutes: v.array(routeOptionValidator),
 		incidentIds: v.array(v.id('incidents')),
 		shortcutIds: v.array(v.id('shortcutSegments')),
+		preferenceSnapshot: routingPreferencesValidator,
 		startedAt: v.number()
 	},
 	handler: async (ctx, args) => {

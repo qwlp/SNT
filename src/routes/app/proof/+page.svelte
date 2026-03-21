@@ -84,17 +84,19 @@
 		</div>
 	</div>
 {:else}
-	<div class="min-h-screen bg-[var(--canvas)] text-[var(--text)]">
+	<div class="min-h-screen bg-[#f6f7f9] text-[#141414]">
 		<div class="mx-auto max-w-[1440px] px-4 py-4 sm:px-6 lg:px-8">
 			<div class="grid gap-4 lg:grid-cols-[220px_minmax(0,1fr)] lg:items-start">
 				<AppNavigation active="proof" summary={summaryItems} />
 
 				<main class="space-y-4">
-					<header class="border border-[var(--border)] bg-[var(--surface)] p-4 sm:p-5">
+					<header
+						class="rounded-[28px] border border-black/8 bg-[rgba(248,248,246,0.98)] p-4 shadow-[0_12px_30px_rgba(17,24,39,0.06)] sm:p-5"
+					>
 						<div class="flex flex-wrap items-center justify-between gap-3">
 							<div class="flex items-center gap-3">
 								<div
-									class="flex h-12 w-12 items-center justify-center border border-[var(--primary)] bg-[var(--primary)] text-white"
+									class="flex h-12 w-12 items-center justify-center rounded-[16px] border border-black/8 bg-white text-[#141414] shadow-[0_8px_20px_rgba(17,24,39,0.05)]"
 								>
 									<svg
 										viewBox="0 0 24 24"
@@ -112,8 +114,8 @@
 									</svg>
 								</div>
 								<div>
-									<p class="text-sm font-semibold text-[var(--text)]">Proof</p>
-									<div class="mt-1 flex items-center gap-3 text-sm text-[var(--muted)]">
+									<p class="text-sm font-semibold text-[#141414]">Proof</p>
+									<div class="mt-1 flex items-center gap-3 text-sm text-black/56">
 										<span class="inline-flex items-center gap-1.5">
 											<svg
 												viewBox="0 0 24 24"
@@ -154,7 +156,7 @@
 							<div class="flex items-center gap-2">
 								<a
 									href={resolve('/app?tab=route')}
-									class="flex h-11 w-11 items-center justify-center border border-[var(--border)] bg-white text-[var(--muted)]"
+									class="flex h-11 w-11 items-center justify-center rounded-[14px] border border-black/8 bg-white text-black/56 shadow-[0_8px_20px_rgba(17,24,39,0.05)]"
 									title="Back to route"
 									aria-label="Back to route"
 								>
@@ -174,7 +176,7 @@
 								<button
 									type="button"
 									onclick={() => void loadDashboard()}
-									class="flex h-11 w-11 items-center justify-center border border-[var(--border)] bg-white text-[var(--muted)]"
+									class="flex h-11 w-11 items-center justify-center rounded-[14px] border border-black/8 bg-white text-black/56 shadow-[0_8px_20px_rgba(17,24,39,0.05)]"
 									title="Refresh"
 									aria-label="Refresh"
 								>
@@ -206,23 +208,27 @@
 					{#if loading}
 						<div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
 							{#each [0, 1] as loadingCard (loadingCard)}
-								<div class="border border-[var(--border)] bg-[var(--surface)] p-4">
-									<div class="h-4 w-20 bg-[var(--surface-muted)]"></div>
-									<div class="mt-3 h-8 w-40 bg-[var(--surface-muted)]"></div>
-									<div class="mt-4 h-24 bg-[var(--surface-muted)]"></div>
+								<div
+									class="rounded-[24px] border border-black/8 bg-white p-4 shadow-[0_10px_28px_rgba(17,24,39,0.06)]"
+								>
+									<div class="h-4 w-20 rounded-full bg-[#eef1f5]"></div>
+									<div class="mt-3 h-8 w-40 rounded-full bg-[#eef1f5]"></div>
+									<div class="mt-4 h-24 rounded-[20px] bg-[#f4f6f8]"></div>
 								</div>
 							{/each}
 						</div>
 					{:else}
 						<div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-							<section class="border border-[var(--border)] bg-[var(--surface)] p-4">
+							<section
+								class="rounded-[24px] border border-black/8 bg-white p-4 shadow-[0_10px_28px_rgba(17,24,39,0.06)]"
+							>
 								<div
-									class="mb-4 flex items-center justify-between gap-3 border-b border-[var(--border)] pb-3"
+									class="mb-4 flex items-center justify-between gap-3 border-b border-black/8 pb-3"
 								>
 									<div class="flex items-center gap-2">
 										<svg
 											viewBox="0 0 24 24"
-											class="h-5 w-5 text-[var(--muted)]"
+											class="h-5 w-5 text-black/50"
 											fill="none"
 											stroke="currentColor"
 											stroke-width="2"
@@ -233,14 +239,14 @@
 											<circle cx="17.5" cy="6.5" r="2.5" />
 											<path d="M8.5 16l7-7" />
 										</svg>
-										<p class="text-lg font-semibold text-[var(--text)]">Trips</p>
+										<p class="text-lg font-semibold text-[#141414]">Trips</p>
 									</div>
-									<span class="px-2 py-1 text-sm text-[var(--muted)]">{routeSessions.length}</span>
+									<span class="px-2 py-1 text-sm text-black/56">{routeSessions.length}</span>
 								</div>
 
 								{#if routeSessions.length === 0}
 									<div
-										class="flex flex-col items-center justify-center gap-3 border border-dashed border-[var(--border)] px-4 py-12 text-center text-[var(--muted)]"
+										class="flex flex-col items-center justify-center gap-3 rounded-[20px] border border-dashed border-black/10 bg-[#fbfcfd] px-4 py-12 text-center text-black/56"
 									>
 										<svg
 											viewBox="0 0 24 24"
@@ -260,13 +266,13 @@
 								{:else}
 									<div class="space-y-3">
 										{#each routeSessions as session (session._id)}
-											<div class="border border-[var(--border)] bg-white p-4">
+											<div class="rounded-[20px] border border-black/8 bg-[#fbfcfd] p-4">
 												<div class="flex items-start justify-between gap-3">
 													<div class="min-w-0">
 														<div class="flex items-center gap-2">
 															<svg
 																viewBox="0 0 24 24"
-																class="h-4 w-4 text-[var(--muted)]"
+																class="h-4 w-4 text-black/50"
 																fill="none"
 																stroke="currentColor"
 																stroke-width="2"
@@ -278,24 +284,24 @@
 																/>
 																<path d="M14 4.5V8h3" />
 															</svg>
-															<p class="text-base font-semibold text-[var(--text)]">
+															<p class="text-base font-semibold text-[#141414]">
 																Trip #{session._id.slice(-6)}
 															</p>
 															<span
 																class={`px-2 py-1 text-[11px] font-semibold ${
 																	session.arrivedAt
 																		? 'bg-[#e8f7ee] text-[#20593b]'
-																		: 'bg-[var(--surface-muted)] text-[var(--muted)]'
+																		: 'bg-[#eef1f5] text-black/56'
 																}`}
 															>
 																{session.arrivedAt ? 'Done' : 'Live'}
 															</span>
 														</div>
-														<p class="mt-2 text-sm text-[var(--muted)]">
+														<p class="mt-2 text-sm text-black/56">
 															{formatDateTime(session.startedAt)}
 														</p>
 													</div>
-													<div class="flex items-center gap-3 text-sm text-[var(--muted)]">
+													<div class="flex items-center gap-3 text-sm text-black/56">
 														<span class="inline-flex items-center gap-1.5">
 															<svg
 																viewBox="0 0 24 24"
@@ -329,9 +335,9 @@
 													</div>
 												</div>
 
-												<div class="mt-4 flex flex-wrap gap-2 text-sm text-[var(--muted)]">
+												<div class="mt-4 flex flex-wrap gap-2 text-sm text-black/56">
 													<span
-														class="inline-flex items-center gap-1.5 border border-[var(--border)] px-2 py-1"
+														class="inline-flex items-center gap-1.5 rounded-full border border-black/8 bg-white px-2 py-1"
 													>
 														<svg
 															viewBox="0 0 24 24"
@@ -348,7 +354,7 @@
 														{Math.round(session.selectedRoute.distanceMeters / 1000)} km
 													</span>
 													<span
-														class="inline-flex items-center gap-1.5 border border-[var(--border)] px-2 py-1"
+														class="inline-flex items-center gap-1.5 rounded-full border border-black/8 bg-white px-2 py-1"
 													>
 														<svg
 															viewBox="0 0 24 24"
@@ -366,7 +372,7 @@
 														{session.selectedRoute.explanationChips.length}
 													</span>
 													<span
-														class="inline-flex items-center gap-1.5 border border-[var(--border)] px-2 py-1"
+														class="inline-flex items-center gap-1.5 rounded-full border border-black/8 bg-white px-2 py-1"
 													>
 														<svg
 															viewBox="0 0 24 24"
@@ -390,7 +396,7 @@
 												<div class="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_180px]">
 													<select
 														bind:value={selectedUniversity[session._id]}
-														class="w-full border border-[var(--border)] bg-white px-3 py-3 text-sm text-[var(--text)] outline-none"
+														class="w-full rounded-[16px] border border-black/8 bg-white px-3 py-3 text-sm text-[#141414] shadow-[0_6px_18px_rgba(17,24,39,0.04)] outline-none"
 													>
 														{#each dashboard?.universities ?? [] as university (university.id)}
 															<option value={university.id}>{university.shortName}</option>
@@ -401,7 +407,7 @@
 														type="button"
 														onclick={() => createProof(session._id)}
 														disabled={!session.arrivedAt || issuingFor === session._id}
-														class="inline-flex items-center justify-center gap-2 border border-[var(--border)] bg-[var(--primary)] px-4 py-3 text-sm font-semibold text-white disabled:opacity-50"
+														class="inline-flex items-center justify-center gap-2 rounded-[16px] border border-[#1e88f7] bg-[#1e88f7] px-4 py-3 text-sm font-semibold text-white shadow-[0_10px_24px_rgba(30,136,247,0.2)] disabled:opacity-50"
 													>
 														<svg
 															viewBox="0 0 24 24"
@@ -424,14 +430,16 @@
 								{/if}
 							</section>
 
-							<section class="border border-[var(--border)] bg-[var(--surface)] p-4">
+							<section
+								class="rounded-[24px] border border-black/8 bg-white p-4 shadow-[0_10px_28px_rgba(17,24,39,0.06)]"
+							>
 								<div
-									class="mb-4 flex items-center justify-between gap-3 border-b border-[var(--border)] pb-3"
+									class="mb-4 flex items-center justify-between gap-3 border-b border-black/8 pb-3"
 								>
 									<div class="flex items-center gap-2">
 										<svg
 											viewBox="0 0 24 24"
-											class="h-5 w-5 text-[var(--muted)]"
+											class="h-5 w-5 text-black/50"
 											fill="none"
 											stroke="currentColor"
 											stroke-width="2"
@@ -441,14 +449,14 @@
 											<path d="M7 4.5h7l3 3V19a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6.5a2 2 0 0 1 2-2Z" />
 											<path d="M14 4.5V8h3" />
 										</svg>
-										<p class="text-lg font-semibold text-[var(--text)]">Certificates</p>
+										<p class="text-lg font-semibold text-[#141414]">Certificates</p>
 									</div>
-									<span class="px-2 py-1 text-sm text-[var(--muted)]">{certificates.length}</span>
+									<span class="px-2 py-1 text-sm text-black/56">{certificates.length}</span>
 								</div>
 
 								{#if certificates.length === 0}
 									<div
-										class="flex flex-col items-center justify-center gap-3 border border-dashed border-[var(--border)] px-4 py-16 text-center text-[var(--muted)]"
+										class="flex flex-col items-center justify-center gap-3 rounded-[20px] border border-dashed border-black/10 bg-[#fbfcfd] px-4 py-16 text-center text-black/56"
 									>
 										<svg
 											viewBox="0 0 24 24"
@@ -467,20 +475,20 @@
 								{:else}
 									<div class="space-y-3">
 										{#each certificates as certificate (certificate._id)}
-											<div class="border border-[var(--border)] bg-white p-4">
+											<div class="rounded-[20px] border border-black/8 bg-[#fbfcfd] p-4">
 												<div class="flex items-start justify-between gap-3">
 													<div>
-														<p class="text-base font-semibold text-[var(--text)]">
+														<p class="text-base font-semibold text-[#141414]">
 															{certificate.university.shortName}
 														</p>
-														<p class="mt-1 text-sm text-[var(--muted)]">
+														<p class="mt-1 text-sm text-black/56">
 															{certificate.delayMinutes} min
 														</p>
 													</div>
 													<div class="flex items-center gap-2">
 														<a
 															href={resolve(`/verify/${certificate.token}`)}
-															class="flex h-10 w-10 items-center justify-center border border-[var(--border)] bg-white text-[var(--muted)]"
+															class="flex h-10 w-10 items-center justify-center rounded-[14px] border border-black/8 bg-white text-black/56 shadow-[0_8px_20px_rgba(17,24,39,0.05)]"
 															title="Verify"
 															aria-label="Verify"
 														>
@@ -499,7 +507,7 @@
 														</a>
 														<a
 															href={resolve(`/verify/${certificate.token}/certificate.pdf`)}
-															class="flex h-10 w-10 items-center justify-center border border-[var(--border)] bg-[var(--primary)] text-white"
+															class="flex h-10 w-10 items-center justify-center rounded-[14px] border border-[#1e88f7] bg-[#1e88f7] text-white shadow-[0_10px_24px_rgba(30,136,247,0.2)]"
 															title="PDF"
 															aria-label="PDF"
 														>
@@ -519,7 +527,7 @@
 														</a>
 													</div>
 												</div>
-												<p class="mt-3 text-sm text-[var(--muted)]">
+												<p class="mt-3 text-sm text-black/56">
 													{formatDateTime(certificate.issuedAt)}
 												</p>
 											</div>

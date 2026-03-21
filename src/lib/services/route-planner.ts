@@ -1,6 +1,16 @@
 import { env } from '$env/dynamic/public';
 import type { Doc } from '../../convex/_generated/dataModel';
+import {
+	DEFAULT_ROUTING_PREFERENCES,
+	type RoutingPreferences,
+	type RoutingMode
+} from '$lib/domain/routing';
 import { INCIDENT_LABELS, INCIDENT_ROUTE_PENALTY, type GeoPoint } from '$lib/domain/traffic';
+import {
+	analyzeRouteMetrics,
+	applyRoutingPreferences,
+	type RouteStepInput
+} from './route-personalization';
 import {
 	distancePointToPolylineMeters,
 	distancePolylineToPolylineMeters,
@@ -37,10 +47,13 @@ interface ProviderRoute {
 	geometry: GeoPoint[];
 	distanceMeters: number;
 	durationSec: number;
+	steps: RouteStepInput[];
+	metrics: ReturnType<typeof analyzeRouteMetrics>;
 	trafficSegments: TrafficSegment[];
 	trafficLevel: TrafficLevel;
 	trafficSummary: string;
 	navigationCue: NavigationCue;
+	trafficEnabled: boolean;
 }
 
 export interface RankedClientRoute {
@@ -51,6 +64,8 @@ export interface RankedClientRoute {
 	distanceMeters: number;
 	durationSec: number;
 	adjustedScore: number;
+	estimatedFuelLiters: number;
+	estimatedTollCostUsd: number;
 	explanationChips: string[];
 	incidentIds: Doc<'incidents'>['_id'][];
 	shortcutIds: Doc<'shortcutSegments'>['_id'][];
@@ -96,6 +111,37 @@ interface MapboxDirectionsResponse {
 }
 
 const FALLBACK_MODIFIERS: NavigationCue['modifier'][] = ['right', 'left', 'straight'];
+const DIRECTIONS_TIMEOUT_MS = 8_000;
+
+const getMapboxProfile = (mode: RoutingMode) => {
+	switch (mode) {
+		case 'bike':
+			return 'cycling';
+		case 'pedestrian':
+			return 'walking';
+		case 'car':
+		case 'scooter':
+		case 'heavy_vehicle':
+		default:
+			return 'driving-traffic';
+	}
+};
+
+const getFallbackSpeedMetersPerSecond = (mode: RoutingMode) => {
+	switch (mode) {
+		case 'pedestrian':
+			return 1.4;
+		case 'bike':
+			return 4.8;
+		case 'heavy_vehicle':
+			return 5.5;
+		case 'scooter':
+			return 7.5;
+		case 'car':
+		default:
+			return 8.5;
+	}
+};
 
 const formatDistanceLabel = (distanceMeters: number) =>
 	distanceMeters >= 1000
@@ -248,13 +294,24 @@ const createFallbackCue = (
 	};
 };
 
-const makeFallbackRoutes = (origin: GeoPoint, destination: GeoPoint): ProviderRoute[] => {
+const createDefaultTrafficSummary = (mode: RoutingMode) => {
+	if (mode === 'bike') return 'Cycling profile prioritized';
+	if (mode === 'pedestrian') return 'Walking access prioritized';
+	if (mode === 'heavy_vehicle') return 'Heavy vehicle route preset';
+	return 'Traffic is moving well';
+};
+
+const makeFallbackRoutes = (
+	origin: GeoPoint,
+	destination: GeoPoint,
+	mode: RoutingMode
+): ProviderRoute[] => {
 	const midpoint = {
 		lat: (origin.lat + destination.lat) / 2,
 		lng: (origin.lng + destination.lng) / 2
 	};
 	const distance = haversineMeters(origin, destination);
-	const directDuration = Math.round((distance / 7.5) * 3.6);
+	const directDuration = Math.round(distance / getFallbackSpeedMetersPerSecond(mode));
 
 	const candidates = [
 		{
@@ -282,24 +339,63 @@ const makeFallbackRoutes = (origin: GeoPoint, destination: GeoPoint): ProviderRo
 
 	return candidates.map((candidate, index) => {
 		const trafficSegments = createFallbackTrafficSegments(candidate.geometry, index);
+		const steps: RouteStepInput[] = [
+			{
+				distanceMeters: candidate.distanceMeters * 0.52,
+				roadName:
+					index === 2 && mode !== 'heavy_vehicle'
+						? 'Shortcut lane'
+						: index === 1
+							? 'Central boulevard'
+							: 'Main road',
+				maneuverType: 'turn',
+				maneuverModifier: index === 1 ? 'left' : 'straight'
+			},
+			{
+				distanceMeters: candidate.distanceMeters * 0.48,
+				roadName: index === 0 ? 'Ring road' : index === 1 ? 'University avenue' : 'Service lane',
+				maneuverType: index === 2 ? 'turn' : 'arrive',
+				maneuverModifier: index === 2 ? 'right' : undefined
+			}
+		];
+		const trafficEnabled = mode === 'car' || mode === 'scooter' || mode === 'heavy_vehicle';
 
 		return {
 			...candidate,
+			steps,
+			metrics: analyzeRouteMetrics(steps, candidate.distanceMeters),
 			trafficSegments,
-			trafficLevel: getDominantTrafficLevel(trafficSegments),
-			trafficSummary: createTrafficSummary(trafficSegments),
-			navigationCue: createFallbackCue(index, candidate.distanceMeters)
+			trafficLevel: trafficEnabled ? getDominantTrafficLevel(trafficSegments) : 'clear',
+			trafficSummary: trafficEnabled
+				? createTrafficSummary(trafficSegments)
+				: createDefaultTrafficSummary(mode),
+			navigationCue: createFallbackCue(index, candidate.distanceMeters),
+			trafficEnabled
 		};
 	});
 };
 
-const normalizeRoutes = (routes: MapboxDirectionsResponse['routes']): ProviderRoute[] =>
+const normalizeRoutes = (
+	routes: MapboxDirectionsResponse['routes'],
+	mode: RoutingMode
+): ProviderRoute[] =>
 	routes.slice(0, 3).map((route, index) => {
 		const geometry = route.geometry.coordinates.map(([lng, lat]) => ({ lat, lng }));
 		const firstLeg = route.legs?.[0];
 		const congestionLevels = route.legs?.flatMap((leg) => leg.annotation?.congestion ?? []) ?? [];
 		const distances = route.legs?.flatMap((leg) => leg.annotation?.distance ?? []) ?? [];
 		const trafficSegments = createTrafficSegments(geometry, congestionLevels, distances);
+		const steps =
+			route.legs?.flatMap((leg) =>
+				(leg.steps ?? []).map(
+					(step): RouteStepInput => ({
+						distanceMeters: step.distance,
+						roadName: step.name,
+						maneuverType: step.maneuver?.type,
+						maneuverModifier: step.maneuver?.modifier
+					})
+				)
+			) ?? [];
 		const cueStep =
 			route.legs
 				?.flatMap((leg) => leg.steps ?? [])
@@ -307,6 +403,7 @@ const normalizeRoutes = (routes: MapboxDirectionsResponse['routes']): ProviderRo
 			firstLeg?.steps?.[0];
 		const modifier = normalizeModifier(cueStep?.maneuver?.modifier, cueStep?.maneuver?.type);
 		const roadName = cueStep?.name?.trim() || 'current road';
+		const trafficEnabled = mode === 'car' || mode === 'scooter' || mode === 'heavy_vehicle';
 
 		return {
 			providerRouteId: `${route.weight_name ?? 'mapbox'}-${index + 1}`,
@@ -314,9 +411,13 @@ const normalizeRoutes = (routes: MapboxDirectionsResponse['routes']): ProviderRo
 			geometry,
 			distanceMeters: route.distance,
 			durationSec: route.duration,
+			steps,
+			metrics: analyzeRouteMetrics(steps, route.distance),
 			trafficSegments,
-			trafficLevel: getDominantTrafficLevel(trafficSegments),
-			trafficSummary: createTrafficSummary(trafficSegments),
+			trafficLevel: trafficEnabled ? getDominantTrafficLevel(trafficSegments) : 'clear',
+			trafficSummary: trafficEnabled
+				? createTrafficSummary(trafficSegments)
+				: createDefaultTrafficSummary(mode),
 			navigationCue: {
 				modifier,
 				roadName,
@@ -327,51 +428,92 @@ const normalizeRoutes = (routes: MapboxDirectionsResponse['routes']): ProviderRo
 						modifier,
 						roadName
 					})
-			}
+			},
+			trafficEnabled
 		};
 	});
 
-const fetchDirections = async ({
+const fetchDirectionsFromMapbox = async ({
 	origin,
-	destination
+	destination,
+	preferences
 }: {
 	origin: GeoPoint;
 	destination: GeoPoint;
+	preferences: RoutingPreferences;
 }) => {
 	try {
 		const token = env.PUBLIC_MAPBOX_ACCESS_TOKEN?.trim();
+		const profile = getMapboxProfile(preferences.mode);
+		const trafficEnabled =
+			preferences.mode === 'car' ||
+			preferences.mode === 'scooter' ||
+			preferences.mode === 'heavy_vehicle';
 
 		if (!token) {
-			return makeFallbackRoutes(origin, destination);
+			return makeFallbackRoutes(origin, destination, preferences.mode);
 		}
 
 		const url = new URL(
-			`https://api.mapbox.com/directions/v5/mapbox/driving-traffic/${origin.lng},${origin.lat};${destination.lng},${destination.lat}`
+			`https://api.mapbox.com/directions/v5/mapbox/${profile}/${origin.lng},${origin.lat};${destination.lng},${destination.lat}`
 		);
 		url.searchParams.set('alternatives', 'true');
 		url.searchParams.set('geometries', 'geojson');
 		url.searchParams.set('overview', 'full');
 		url.searchParams.set('steps', 'true');
-		url.searchParams.set('annotations', 'congestion,distance');
+		if (trafficEnabled) {
+			url.searchParams.set('annotations', 'congestion,distance');
+		}
 		url.searchParams.set('access_token', token);
 
-		const response = await fetch(url);
+		const abortController = new AbortController();
+		const timeoutId = globalThis.setTimeout(() => {
+			abortController.abort();
+		}, DIRECTIONS_TIMEOUT_MS);
+
+		const response = await fetch(url, {
+			signal: abortController.signal
+		}).finally(() => {
+			globalThis.clearTimeout(timeoutId);
+		});
 
 		if (!response.ok) {
-			return makeFallbackRoutes(origin, destination);
+			return makeFallbackRoutes(origin, destination, preferences.mode);
 		}
 
 		const data = (await response.json()) as MapboxDirectionsResponse;
 
 		if (!data.routes?.length) {
-			return makeFallbackRoutes(origin, destination);
+			return makeFallbackRoutes(origin, destination, preferences.mode);
 		}
 
-		return normalizeRoutes(data.routes);
+		return normalizeRoutes(data.routes, preferences.mode);
 	} catch {
-		return makeFallbackRoutes(origin, destination);
+		return makeFallbackRoutes(origin, destination, preferences.mode);
 	}
 };
+
+const fetchDirections = async ({
+	origin,
+	destination,
+	preferences
+}: {
+	origin: GeoPoint;
+	destination: GeoPoint;
+	preferences: RoutingPreferences;
+}) =>
+	await Promise.race([
+		fetchDirectionsFromMapbox({
+			origin,
+			destination,
+			preferences
+		}),
+		new Promise<ProviderRoute[]>((resolve) => {
+			globalThis.setTimeout(() => {
+				resolve(makeFallbackRoutes(origin, destination, preferences.mode));
+			}, DIRECTIONS_TIMEOUT_MS + 500);
+		})
+	]);
 
 const findRouteIncidents = (route: ProviderRoute, incidents: Doc<'incidents'>[]) => {
 	const incidentIds: Doc<'incidents'>['_id'][] = [];
@@ -431,21 +573,32 @@ export const planRankedRoutes = async ({
 	origin,
 	destination,
 	incidents,
-	shortcuts
+	shortcuts,
+	preferences = DEFAULT_ROUTING_PREFERENCES
 }: {
 	origin: GeoPoint;
 	destination: GeoPoint;
 	incidents: Doc<'incidents'>[];
 	shortcuts: Doc<'shortcutSegments'>[];
+	preferences?: RoutingPreferences;
 }) => {
-	const providerRoutes = await fetchDirections({ origin, destination });
+	const providerRoutes = await fetchDirections({ origin, destination, preferences });
 	const generatedAt = Date.now();
 
 	const routes = providerRoutes
 		.map((route, index) => {
 			const incidentMatch = findRouteIncidents(route, incidents);
 			const shortcutMatch = findRouteShortcuts(route, shortcuts);
-			const adjustedScore = route.durationSec + incidentMatch.penalty - shortcutMatch.bonus;
+			const preferenceMatch = applyRoutingPreferences({
+				baseDurationSec: route.durationSec,
+				distanceMeters: route.distanceMeters,
+				incidentPenalty: incidentMatch.penalty,
+				shortcutBonus: shortcutMatch.bonus,
+				shortcutCount: shortcutMatch.shortcutIds.length,
+				metrics: route.metrics,
+				preferences,
+				generatedAt
+			});
 
 			return {
 				routeId: `route-${index + 1}`,
@@ -454,17 +607,23 @@ export const planRankedRoutes = async ({
 				geometry: route.geometry,
 				distanceMeters: route.distanceMeters,
 				durationSec: route.durationSec,
-				adjustedScore,
+				adjustedScore: preferenceMatch.adjustedScore,
+				estimatedFuelLiters: preferenceMatch.estimatedFuelLiters,
+				estimatedTollCostUsd: preferenceMatch.estimatedTollCostUsd,
 				explanationChips: [
 					route.trafficSummary,
-					...new Set([...incidentMatch.explanationChips, ...shortcutMatch.explanationChips])
+					...new Set([
+						...preferenceMatch.personalizationChips,
+						...incidentMatch.explanationChips,
+						...shortcutMatch.explanationChips
+					])
 				],
 				incidentIds: incidentMatch.incidentIds,
 				shortcutIds: shortcutMatch.shortcutIds,
 				trafficLevel: route.trafficLevel,
 				trafficSummary: route.trafficSummary,
 				trafficSegments: route.trafficSegments,
-				trafficEnabled: true,
+				trafficEnabled: route.trafficEnabled,
 				arrivalTime: generatedAt + route.durationSec * 1000,
 				navigationCue: route.navigationCue
 			} satisfies RankedClientRoute;

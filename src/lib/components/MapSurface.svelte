@@ -106,6 +106,7 @@
 		onRouteSelect,
 		onDestinationPick,
 		liveNavigation = false,
+		followUser = false,
 		fullscreen = false,
 		showHeader = !fullscreen
 	} = $props<{
@@ -123,6 +124,7 @@
 		onRouteSelect?: (routeId: string) => void;
 		onDestinationPick?: (point: GeoPoint) => void;
 		liveNavigation?: boolean;
+		followUser?: boolean;
 		fullscreen?: boolean;
 		showHeader?: boolean;
 	}>();
@@ -149,8 +151,9 @@
 	const mapboxSatelliteStyleUrl = 'mapbox://styles/mapbox/satellite-streets-v12';
 	const getMapStyleUrl = () => (isSatellite ? mapboxSatelliteStyleUrl : mapboxStyleUrl);
 
-	const getPitch = () => (liveNavigation ? 64 : !isThreeD ? 0 : 58);
-	const getBearing = () => (liveNavigation ? lastNavigationBearing : !isThreeD ? 0 : -18);
+	const getPitch = () => (liveNavigation ? 72 : followUser ? 70 : !isThreeD ? 0 : 58);
+	const getBearing = () =>
+		liveNavigation || followUser ? lastNavigationBearing : !isThreeD ? 0 : -18;
 	const getDestinationPalette = (tone: DestinationTone) =>
 		tone === 'report'
 			? {
@@ -232,6 +235,16 @@
 
 		return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
 	};
+
+	const interpolateHeading = (from: number, to: number, smoothing: number) => {
+		const delta = ((((to - from) % 360) + 540) % 360) - 180;
+		return (from + delta * smoothing + 360) % 360;
+	};
+
+	const interpolatePoint = (from: GeoPoint, to: GeoPoint, amount: number): GeoPoint => ({
+		lat: from.lat + (to.lat - from.lat) * amount,
+		lng: from.lng + (to.lng - from.lng) * amount
+	});
 
 	const getNavigationLookAheadPoint = (
 		location: GeoPoint,
@@ -467,7 +480,7 @@
 		if (viewportSignature === nextSignature) return;
 		viewportSignature = nextSignature;
 
-		if (liveNavigation && currentLocation) {
+		if ((liveNavigation || followUser) && currentLocation) {
 			const navigationPath = getActiveNavigationPath();
 			const lookAheadPoint = getNavigationLookAheadPoint(
 				currentLocation,
@@ -476,21 +489,30 @@
 			);
 
 			if (lookAheadPoint) {
-				lastNavigationBearing = getHeadingBetweenPoints(currentLocation, lookAheadPoint);
+				const nextBearing = getHeadingBetweenPoints(currentLocation, lookAheadPoint);
+				lastNavigationBearing = interpolateHeading(lastNavigationBearing, nextBearing, 0.22);
 			}
 
+			const cameraTarget = liveNavigation
+				? lookAheadPoint
+					? interpolatePoint(currentLocation, lookAheadPoint, 0.18)
+					: currentLocation
+				: lookAheadPoint
+					? interpolatePoint(currentLocation, lookAheadPoint, 0.08)
+					: currentLocation;
+
 			map.easeTo({
-				center: [currentLocation.lng, currentLocation.lat],
-				zoom: 17.1,
+				center: [cameraTarget.lng, cameraTarget.lat],
+				zoom: liveNavigation ? 18.35 : 18.85,
 				pitch: getPitch(),
 				bearing: getBearing(),
 				padding: {
-					top: 120,
-					right: 64,
-					bottom: 240,
-					left: 64
+					top: liveNavigation ? 104 : 96,
+					right: 48,
+					bottom: liveNavigation ? 312 : 280,
+					left: 48
 				},
-				duration: 900,
+				duration: 850,
 				essential: true
 			});
 			return;
@@ -907,7 +929,7 @@
 						'fill-extrusion-color': '#d4b07f',
 						'fill-extrusion-height': ['get', 'height'],
 						'fill-extrusion-base': ['coalesce', ['get', 'min_height'], 0],
-						'fill-extrusion-opacity': 0.55
+						'fill-extrusion-opacity': liveNavigation ? 0.82 : 0.55
 					}
 				},
 				findLabelLayerId()
@@ -1172,7 +1194,7 @@
 		let cancelled = false;
 		let removeInteractionHandlers = () => {};
 
-		isThreeD = !liveNavigation;
+		isThreeD = !liveNavigation && !followUser;
 
 		const initMap = async () => {
 			const mapboxImport = await import('mapbox-gl');
@@ -1311,6 +1333,16 @@
 	});
 
 	$effect(() => {
+		if (!map || !styleReady || !map.getLayer(BUILDINGS_LAYER_ID)) return;
+
+		map.setPaintProperty(
+			BUILDINGS_LAYER_ID,
+			'fill-extrusion-opacity',
+			liveNavigation ? 0.82 : 0.55
+		);
+	});
+
+	$effect(() => {
 		if (!map || !styleReady) return;
 
 		const palette = getDestinationPalette(destinationTone);
@@ -1320,7 +1352,7 @@
 	});
 
 	$effect(() => {
-		if (!liveNavigation) return;
+		if (!liveNavigation && !followUser) return;
 
 		isThreeD = true;
 		applyThreeDMode(false);

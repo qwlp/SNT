@@ -8,6 +8,15 @@
 	import IncidentTypeIcon from '$lib/components/IncidentTypeIcon.svelte';
 	import { getClerkContext } from '$lib/stores/clerk.svelte';
 	import {
+		DEFAULT_ROUTING_PREFERENCES,
+		ROUTING_COST_PRIORITIES,
+		ROUTING_MODES,
+		normalizeRoutingPreferences,
+		type RoutingCostPriority,
+		type RoutingMode,
+		type RoutingPreferences
+	} from '$lib/domain/routing';
+	import {
 		INCIDENT_LABELS,
 		INCIDENT_TYPES,
 		PHNOM_PENH_CENTER,
@@ -17,6 +26,7 @@
 		type UniversitySeed
 	} from '$lib/domain/traffic';
 	import { haversineMeters, isNearDestination } from '$lib/services/geo';
+	import { searchPlaces, type PlaceSearchResult } from '$lib/services/place-search';
 	import {
 		planRankedRoutes,
 		type RankedClientRouteResult,
@@ -37,6 +47,8 @@
 		distanceMeters: number;
 		durationSec: number;
 		adjustedScore: number;
+		estimatedFuelLiters: number;
+		estimatedTollCostUsd: number;
 		explanationChips: string[];
 		incidentIds: Id<'incidents'>[];
 		shortcutIds: Id<'shortcutSegments'>[];
@@ -66,6 +78,7 @@
 		alternativeRoutes: StoredRouteOption[];
 		incidentIds: Id<'incidents'>[];
 		shortcutIds: Id<'shortcutSegments'>[];
+		preferenceSnapshot: RoutingPreferences;
 		startedAt: number;
 	};
 
@@ -179,6 +192,21 @@
 		if (level === 'light') return 'Light';
 		return 'Clear';
 	};
+	const getRoutingModeLabel = (mode: RoutingMode) => {
+		if (mode === 'heavy_vehicle') return 'Heavy vehicle';
+		if (mode === 'pedestrian') return 'Pedestrian';
+		return mode.charAt(0).toUpperCase() + mode.slice(1);
+	};
+	const getCostPriorityLabel = (priority: RoutingCostPriority) => {
+		if (priority === 'lowest_tolls') return 'Lowest tolls';
+		if (priority === 'lowest_fuel') return 'Lowest fuel';
+		if (priority === 'fastest') return 'Fastest';
+		return 'Balanced';
+	};
+	const formatFuelEstimate = (liters: number) =>
+		liters <= 0 ? 'No fuel' : `${liters.toFixed(liters >= 10 ? 0 : 1)} L`;
+	const formatTollEstimate = (usd: number) =>
+		usd <= 0.01 ? 'No tolls' : `$${usd.toFixed(usd >= 10 ? 0 : 2)}`;
 	const getRoleLabel = (role: 'citizen' | 'campus_rep' | undefined) =>
 		role === 'campus_rep' ? 'Campus rep' : 'Citizen';
 	const getIncidentStatusClass = (status: 'active' | 'expired') =>
@@ -191,6 +219,26 @@
 			day: 'numeric'
 		});
 	const formatPointLabel = (point: GeoPoint) => `${point.lat.toFixed(4)}, ${point.lng.toFixed(4)}`;
+	const buildGoogleMapsDirectionsHref = (
+		destination: GeoPoint,
+		origin?: GeoPoint | null,
+		mode: RoutingMode = routingPreferences.mode
+	) => {
+		const url = new URL('https://www.google.com/maps/dir/');
+		url.searchParams.set('api', '1');
+		url.searchParams.set('destination', `${destination.lat},${destination.lng}`);
+
+		if (origin) {
+			url.searchParams.set('origin', `${origin.lat},${origin.lng}`);
+		}
+
+		url.searchParams.set(
+			'travelmode',
+			mode === 'pedestrian' ? 'walking' : mode === 'bike' ? 'bicycling' : 'driving'
+		);
+
+		return url.toString();
+	};
 	const createRouteDestination = (
 		point: GeoPoint,
 		override?: Pick<RouteDestinationState, 'label' | 'detail' | 'presetId'>
@@ -233,6 +281,8 @@
 		distanceMeters: route.distanceMeters,
 		durationSec: route.durationSec,
 		adjustedScore: route.adjustedScore,
+		estimatedFuelLiters: route.estimatedFuelLiters,
+		estimatedTollCostUsd: route.estimatedTollCostUsd,
 		explanationChips: route.explanationChips,
 		incidentIds: route.incidentIds,
 		shortcutIds: route.shortcutIds
@@ -251,6 +301,7 @@
 		routeDestination = nextDestination;
 		routeSheetOpen = true;
 		routeRequestId += 1;
+		pendingRouteRequestCount = 0;
 		routeLoading = false;
 		routeResult = null;
 		selectedRouteId = null;
@@ -267,6 +318,7 @@
 		routeDestination = null;
 		routeSheetOpen = false;
 		routeRequestId += 1;
+		pendingRouteRequestCount = 0;
 		routeLoading = false;
 		routeResult = null;
 		selectedRouteId = null;
@@ -274,6 +326,15 @@
 		routeError = null;
 		tripError = null;
 		tripMessage = null;
+		resetDestinationSearch();
+	};
+	const resetDestinationSearch = () => {
+		searchQuery = '';
+		searchLockedQuery = null;
+		searchResults = [];
+		searchLoading = false;
+		searchError = null;
+		searchRequestId += 1;
 	};
 
 	let selectedType = $state<IncidentType>('roadblock');
@@ -302,6 +363,15 @@
 	let drawerExpanded = $state(true);
 	let routeRequestId = $state(0);
 	let profileSyncRequest: Promise<unknown> | null = null;
+	let routePreferencesSaving = $state(false);
+	let routePreferencesError = $state<string | null>(null);
+	let searchQuery = $state('');
+	let searchLockedQuery = $state<string | null>(null);
+	let searchResults = $state<PlaceSearchResult[]>([]);
+	let searchLoading = $state(false);
+	let searchError = $state<string | null>(null);
+	let searchRequestId = $state(0);
+	let pendingRouteRequestCount = 0;
 
 	const activeTab = $derived.by((): AppTab => {
 		const tab = page.url.searchParams.get('tab');
@@ -312,6 +382,9 @@
 	const incidents = $derived(incidentsQuery.data ?? []);
 	const myIncidents = $derived(myIncidentsQuery.data ?? []);
 	const shortcuts = $derived(shortcutsQuery.data ?? []);
+	const routingPreferences = $derived(
+		normalizeRoutingPreferences(meQuery.data?.routingPreferences ?? DEFAULT_ROUTING_PREFERENCES)
+	);
 	const routeOptions = $derived(routeResult?.routes ?? []);
 	const selectedRoute = $derived(
 		routeOptions.find((route) => route.routeId === selectedRouteId) ?? routeOptions[0] ?? null
@@ -329,7 +402,9 @@
 		[reportLocation, currentLocation].filter((point): point is GeoPoint => point !== null)
 	);
 	const nextCueDistanceLabel = $derived(
-		navigationRoute ? formatNavDistance(navigationRoute.navigationCue.distanceMeters) : 'Pin route'
+		navigationRoute
+			? formatNavDistance(navigationRoute.navigationCue.distanceMeters)
+			: 'Search route'
 	);
 	const nextArrivalLabel = $derived(
 		navigationRoute ? formatArrivalTime(navigationRoute.arrivalTime) : '--:--'
@@ -354,7 +429,7 @@
 		routeDestination?.detail ??
 			(currentRouteDestination
 				? `${currentRouteDestination.lat.toFixed(4)}, ${currentRouteDestination.lng.toFixed(4)}`
-				: 'Double-click anywhere on the map to pin a destination.')
+				: 'Search for a destination to load route options.')
 	);
 	const routeDistanceLabel = $derived.by(() => {
 		if (selectedRoute) {
@@ -397,6 +472,29 @@
 			Boolean(tripError) ||
 			tripStatus !== 'idle'
 	);
+	const routeSearchVisible = $derived(activeTab === 'route' && !hasRouteContext);
+	const destinationDirectionsHref = $derived.by(() =>
+		currentRouteDestination
+			? buildGoogleMapsDirectionsHref(
+					currentRouteDestination,
+					currentLocation,
+					routingPreferences.mode
+				)
+			: null
+	);
+	const preferenceSummary = $derived.by(() => {
+		const chips = [
+			getRoutingModeLabel(routingPreferences.mode),
+			getCostPriorityLabel(routingPreferences.costPriority)
+		];
+
+		if (routingPreferences.avoidHighways) chips.push('Avoid highways');
+		if (routingPreferences.avoidUTurns) chips.push('Avoid U-turns');
+		if (routingPreferences.preferWellLitStreets) chips.push('Prefer lit streets');
+		if (routingPreferences.preferFewerTurns) chips.push('Fewer turns');
+
+		return chips;
+	});
 	const withTimeout = <T,>(promise: Promise<T>, timeoutMs: number, message: string) =>
 		new Promise<T>((resolve, reject) => {
 			const timeoutId = window.setTimeout(() => {
@@ -424,6 +522,115 @@
 		}
 
 		return 'border-[#f0dfb5] bg-[#fff7e2] text-[#6d5320]';
+	};
+	const runPlaceSearch = async (query = searchQuery) => {
+		const trimmedQuery = query.trim();
+
+		if (trimmedQuery.length < 2) {
+			searchResults = [];
+			searchLoading = false;
+			searchError = null;
+			return [];
+		}
+
+		const requestId = searchRequestId + 1;
+		searchRequestId = requestId;
+		searchLoading = true;
+		searchError = null;
+
+		try {
+			const results = await searchPlaces({
+				query: trimmedQuery,
+				proximity: currentLocation,
+				limit: 6
+			});
+
+			if (requestId !== searchRequestId) {
+				return [];
+			}
+
+			searchResults = results;
+			searchError = results.length === 0 ? `No places matched "${trimmedQuery}".` : null;
+			return results;
+		} catch (error) {
+			if (requestId !== searchRequestId) {
+				return [];
+			}
+
+			searchResults = [];
+			searchError = formatError(error, 'Unable to search places right now.');
+			return [];
+		} finally {
+			if (requestId === searchRequestId) {
+				searchLoading = false;
+			}
+		}
+	};
+
+	const selectSearchResult = (result: PlaceSearchResult) => {
+		searchQuery = result.label;
+		searchLockedQuery = result.label;
+		searchResults = [];
+		searchLoading = false;
+		searchError = null;
+
+		const nextDestination = setRouteDestination(result.point, {
+			label: result.label,
+			detail: result.detail,
+			presetId: result.presetId
+		});
+		if (!nextDestination) return;
+
+		void planRoute(nextDestination);
+	};
+
+	const submitPlaceSearch = async () => {
+		const immediateResult = searchResults[0];
+		if (immediateResult) {
+			selectSearchResult(immediateResult);
+			return;
+		}
+
+		const results = await runPlaceSearch();
+		if (results[0]) {
+			selectSearchResult(results[0]);
+			return;
+		}
+
+		routeSheetOpen = true;
+	};
+
+	const handleSearchInput = (event: Event) => {
+		const target = event.currentTarget;
+		if (!(target instanceof HTMLInputElement)) return;
+
+		searchQuery = target.value;
+
+		if (searchLockedQuery && target.value.trim() !== searchLockedQuery) {
+			searchLockedQuery = null;
+		}
+
+		if (target.value.trim().length === 0) {
+			searchResults = [];
+			searchLoading = false;
+			searchError = null;
+			searchRequestId += 1;
+		}
+	};
+
+	const handleSearchKeydown = (event: KeyboardEvent) => {
+		if (event.key === 'Enter') {
+			event.preventDefault();
+			void submitPlaceSearch();
+			return;
+		}
+
+		if (event.key === 'Escape') {
+			searchResults = [];
+			searchLoading = false;
+			searchError = null;
+			searchRequestId += 1;
+		}
 	};
 
 	const stopTripSampling = () => {
@@ -462,15 +669,57 @@
 		tripMessage = `Trip started to ${target.label}. Cloud sync is unavailable, so tracking is local on this device.`;
 	};
 
-	const planRoute = async (target = routeDestination) => {
+	const updateRoutingPreferences = async (patch: Partial<RoutingPreferences>) => {
+		if (routePreferencesSaving) return;
+
+		routePreferencesSaving = true;
+		routePreferencesError = null;
+
+		const nextPreferences = normalizeRoutingPreferences({
+			...routingPreferences,
+			...patch
+		});
+
+		try {
+			await convex.mutation(api.authed.users.updateRoutingPreferences, {
+				routingPreferences: nextPreferences
+			});
+
+			if (routeDestination && tripStatus !== 'tracking') {
+				await planRoute(routeDestination, nextPreferences);
+			}
+		} catch (error) {
+			routePreferencesError = formatError(error, 'Unable to save route preferences.');
+		} finally {
+			routePreferencesSaving = false;
+		}
+	};
+
+	const handleRoutingModeChange = (event: Event) => {
+		const target = event.currentTarget;
+		if (!(target instanceof HTMLSelectElement)) return;
+		void updateRoutingPreferences({ mode: target.value as RoutingMode });
+	};
+
+	const handleCostPriorityChange = (event: Event) => {
+		const target = event.currentTarget;
+		if (!(target instanceof HTMLSelectElement)) return;
+		void updateRoutingPreferences({ costPriority: target.value as RoutingCostPriority });
+	};
+
+	const planRoute = async (
+		target = routeDestination,
+		preferencesOverride: RoutingPreferences = routingPreferences
+	) => {
 		if (!target) {
-			routeError = 'Double-click anywhere on the map to choose a destination first.';
+			routeError = 'Search for a destination first.';
 			routeSheetOpen = true;
 			return;
 		}
 
 		const requestId = routeRequestId + 1;
 		routeRequestId = requestId;
+		pendingRouteRequestCount += 1;
 		routeLoading = true;
 		routeError = null;
 		routeMessage = null;
@@ -481,7 +730,8 @@
 				origin: currentLocation ?? PHNOM_PENH_CENTER,
 				destination: target.point,
 				incidents,
-				shortcuts
+				shortcuts,
+				preferences: preferencesOverride
 			});
 
 			if (requestId !== routeRequestId) {
@@ -505,9 +755,8 @@
 			}
 			routeError = formatError(error, 'Unable to plan route.');
 		} finally {
-			if (requestId === routeRequestId) {
-				routeLoading = false;
-			}
+			pendingRouteRequestCount = Math.max(0, pendingRouteRequestCount - 1);
+			routeLoading = pendingRouteRequestCount > 0;
 		}
 	};
 
@@ -518,7 +767,7 @@
 			return;
 		}
 		if (!routeDestination) {
-			tripError = 'Double-click on the map to pin where you are going first.';
+			tripError = 'Search for where you are going first.';
 			routeSheetOpen = true;
 			return;
 		}
@@ -538,6 +787,7 @@
 						.map(toStoredRoute),
 					incidentIds: selectedRoute.incidentIds,
 					shortcutIds: selectedRoute.shortcutIds,
+					preferenceSnapshot: routingPreferences,
 					startedAt: Date.now()
 				}),
 				10_000,
@@ -688,9 +938,14 @@
 		setReportLocation(point, 'pin');
 	};
 
-	const pickDestinationFromMap = (point: GeoPoint) => {
+	const pickRouteDestinationFromMap = (point: GeoPoint) => {
 		const nextDestination = setRouteDestination(point);
 		if (!nextDestination) return;
+
+		searchQuery = nextDestination.label;
+		searchLockedQuery = null;
+		searchResults = [];
+		searchError = null;
 
 		void planRoute(nextDestination);
 	};
@@ -702,6 +957,11 @@
 			presetId: university.id
 		});
 		if (!nextDestination) return;
+
+		searchQuery = university.shortName;
+		searchLockedQuery = university.shortName;
+		searchResults = [];
+		searchError = null;
 
 		void planRoute(nextDestination);
 	};
@@ -719,6 +979,7 @@
 			routeError = null;
 			tripMessage = null;
 			tripError = null;
+			resetDestinationSearch();
 			selectedRouteId = null;
 			activeTripId = null;
 			activeTrip = null;
@@ -747,6 +1008,36 @@
 	});
 
 	$effect(() => {
+		if (!routeSearchVisible) {
+			searchResults = [];
+			searchLoading = false;
+			searchError = null;
+			searchRequestId += 1;
+			return;
+		}
+
+		const trimmedQuery = searchQuery.trim();
+		if (trimmedQuery.length < 2) {
+			searchResults = [];
+			searchLoading = false;
+			searchError = null;
+			return;
+		}
+
+		if (searchLockedQuery && trimmedQuery === searchLockedQuery) {
+			return;
+		}
+
+		const timeoutId = window.setTimeout(() => {
+			void runPlaceSearch(trimmedQuery);
+		}, 280);
+
+		return () => {
+			window.clearTimeout(timeoutId);
+		};
+	});
+
+	$effect(() => {
 		if (!navigator.geolocation) {
 			currentLocation = PHNOM_PENH_CENTER;
 			return;
@@ -760,11 +1051,12 @@
 				};
 			},
 			() => {
-				currentLocation = PHNOM_PENH_CENTER;
+				currentLocation ??= PHNOM_PENH_CENTER;
 			},
 			{
 				enableHighAccuracy: true,
-				maximumAge: 30_000
+				maximumAge: 1_500,
+				timeout: 10_000
 			}
 		);
 
@@ -807,7 +1099,7 @@
 		</div>
 	</div>
 {:else}
-	<div class="relative h-[100svh] overflow-hidden bg-[#0b0d11] text-white">
+	<div class="relative h-[100svh] overflow-hidden bg-[var(--canvas)] text-[var(--text)]">
 		<div class="absolute inset-0">
 			<MapSurface
 				{currentLocation}
@@ -825,6 +1117,7 @@
 					? 'Double-click again anywhere to move this report pin.'
 					: 'Double-click again anywhere to move this destination.'}
 				liveNavigation={tripStatus === 'tracking'}
+				followUser={false}
 				activeRouteStyle={tripStatus === 'tracking' ? 'navigation' : 'traffic'}
 				activeRouteId={tripStatus === 'tracking'
 					? (activeTrip?.routeId ?? selectedRouteId)
@@ -833,10 +1126,10 @@
 				fullscreen={true}
 				showHeader={false}
 				onRouteSelect={selectRoute}
-				onDestinationPick={activeTab === 'route'
-					? pickDestinationFromMap
-					: activeTab === 'pulse'
-						? pickReportLocationFromMap
+				onDestinationPick={activeTab === 'pulse'
+					? pickReportLocationFromMap
+					: activeTab === 'route'
+						? pickRouteDestinationFromMap
 						: undefined}
 			/>
 		</div>
@@ -859,6 +1152,155 @@
 				</div>
 			</div>
 		</div>
+
+		{#if routeSearchVisible}
+			<div
+				class="pointer-events-none absolute inset-x-0 top-0 z-24 px-3 pt-[calc(env(safe-area-inset-top,0px)+12px)] sm:px-2 sm:pt-3"
+			>
+				<div class="mx-auto flex max-w-[1440px] justify-center sm:mx-0 sm:justify-start">
+					<div class="pointer-events-auto w-full max-w-[520px]">
+						<div
+							class="overflow-hidden rounded-[28px] border border-black/8 bg-[rgba(248,248,246,0.98)] text-[var(--text)] shadow-[0_24px_64px_rgba(0,0,0,0.14)] backdrop-blur-2xl"
+						>
+							<form
+								class="flex items-center gap-3 px-4 py-3"
+								onsubmit={(event) => {
+									event.preventDefault();
+									void submitPlaceSearch();
+								}}
+							>
+								<div
+									class="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[var(--surface-muted)] text-[var(--muted)]"
+								>
+									<svg
+										viewBox="0 0 24 24"
+										class="h-5 w-5"
+										fill="none"
+										stroke="currentColor"
+										stroke-width="2.2"
+										stroke-linecap="round"
+										stroke-linejoin="round"
+									>
+										<circle cx="11" cy="11" r="7" />
+										<path d="m20 20-3.5-3.5" />
+									</svg>
+								</div>
+
+								<div class="min-w-0 flex-1">
+									<p class="text-[10px] tracking-[0.24em] text-[var(--muted)] uppercase">
+										Search destination
+									</p>
+									<input
+										type="text"
+										value={searchQuery}
+										oninput={handleSearchInput}
+										onkeydown={handleSearchKeydown}
+										placeholder="Place, address, campus, or lat,lng"
+										autocomplete="off"
+										spellcheck="false"
+										class="mt-1 w-full bg-transparent text-[15px] font-medium text-[var(--text)] placeholder:text-black/34 focus:outline-none"
+									/>
+								</div>
+
+								{#if searchQuery}
+									<button
+										type="button"
+										onclick={resetDestinationSearch}
+										class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-black/8 bg-white text-black/58 hover:bg-[#f3f0ea]"
+										aria-label="Clear search"
+										title="Clear search"
+									>
+										<svg
+											viewBox="0 0 24 24"
+											class="h-5 w-5"
+											fill="none"
+											stroke="currentColor"
+											stroke-width="2.2"
+											stroke-linecap="round"
+											stroke-linejoin="round"
+										>
+											<path d="M18 6 6 18" />
+											<path d="m6 6 12 12" />
+										</svg>
+									</button>
+								{/if}
+
+								<button
+									type="submit"
+									disabled={searchQuery.trim().length < 2}
+									class="rounded-full bg-[var(--primary)] px-4 py-2 text-sm font-semibold text-white hover:bg-[#5a4229] disabled:opacity-50"
+								>
+									Route
+								</button>
+							</form>
+
+							{#if searchLoading || searchResults.length > 0 || searchError || destinationDirectionsHref}
+								<div class="border-t border-black/8 px-3 py-3">
+									{#if searchLoading}
+										<div class="rounded-[20px] bg-[#f8f5ee] px-4 py-3 text-sm text-black/58">
+											Searching nearby places...
+										</div>
+									{:else if searchResults.length > 0}
+										<div class="space-y-2">
+											{#each searchResults as result (result.id)}
+												<button
+													type="button"
+													onclick={() => selectSearchResult(result)}
+													class="block w-full rounded-[20px] border border-black/8 bg-white px-4 py-3 text-left transition hover:bg-[#faf7f1]"
+												>
+													<div class="flex items-start justify-between gap-3">
+														<div class="min-w-0">
+															<p class="truncate text-sm font-medium text-[var(--text)]">
+																{result.label}
+															</p>
+															<p class="mt-1 line-clamp-2 text-xs leading-5 text-[var(--muted)]">
+																{result.detail}
+															</p>
+														</div>
+														<span
+															class="shrink-0 rounded-full bg-[var(--primary-soft)] px-2.5 py-1 text-[11px] font-semibold text-[var(--text)]"
+														>
+															Route
+														</span>
+													</div>
+												</button>
+											{/each}
+										</div>
+									{:else if searchError}
+										<div class="rounded-[20px] bg-[#a44c39]/20 px-4 py-3 text-sm text-[#ffd2c6]">
+											{searchError}
+										</div>
+									{/if}
+
+									{#if destinationDirectionsHref}
+										<div
+											class="mt-2 flex items-center justify-between gap-3 rounded-[20px] bg-[#f8f5ee] px-4 py-3"
+										>
+											<div class="min-w-0">
+												<p class="truncate text-sm font-medium text-[var(--text)]">
+													{currentRouteDestinationLabel}
+												</p>
+												<p class="mt-1 truncate text-xs text-[var(--muted)]">
+													{currentRouteDestinationDetail}
+												</p>
+											</div>
+											<button
+												type="button"
+												onclick={() =>
+													window.open(destinationDirectionsHref, '_blank', 'noopener,noreferrer')}
+												class="shrink-0 rounded-full border border-black/8 bg-white px-3 py-2 text-xs font-semibold text-black/68 hover:bg-[#f3f0ea]"
+											>
+												Open in Maps
+											</button>
+										</div>
+									{/if}
+								</div>
+							{/if}
+						</div>
+					</div>
+				</div>
+			</div>
+		{/if}
 
 		{#if activeTab === 'route' && showRouteHud}
 			<div
@@ -1499,7 +1941,7 @@
 
 								<p class="pr-[8.5rem] text-[1.05rem] leading-7 font-medium text-black/68">
 									{navigationRoute?.navigationCue.instruction ??
-										'Touch and hold anywhere on the map to move this pin.'}
+										'Search for a destination to compare route options.'}
 								</p>
 
 								<div class="mt-2.5 flex flex-wrap gap-2">
@@ -1537,6 +1979,15 @@
 								<div class="mx-auto h-1.5 w-12 rounded-full bg-black/10"></div>
 
 								<div class="mt-3">
+									<div class="mb-3 flex flex-wrap gap-1.5">
+										{#each preferenceSummary.slice(0, 3) as chip (chip)}
+											<span
+												class="rounded-full border border-black/8 bg-[#f5f5f2] px-2.5 py-1 text-[11px] font-medium text-black/60"
+											>
+												{chip}
+											</span>
+										{/each}
+									</div>
 									{#if routeLoading}
 										<div class="grid grid-cols-3 gap-2">
 											{#each [0, 1, 2] as loadingCard (loadingCard)}
@@ -1579,6 +2030,11 @@
 															{getTrafficLabel(route.trafficLevel)}
 														</span>
 													</div>
+													<p class="mt-2 text-[10px] text-black/44">
+														{formatTollEstimate(route.estimatedTollCostUsd)} • {formatFuelEstimate(
+															route.estimatedFuelLiters
+														)}
+													</p>
 												</button>
 											{/each}
 										</div>
@@ -1586,7 +2042,7 @@
 										<div
 											class="rounded-[18px] border border-dashed border-black/10 bg-[#f8f8f6] px-3.5 py-3 text-[13px] leading-5 text-black/56"
 										>
-											Refresh to load routes, or move the pin slightly.
+											Refresh to load routes again.
 										</div>
 									{/if}
 								</div>
@@ -1683,6 +2139,16 @@
 										>
 											{university.shortName}
 										</button>
+									{/each}
+								</div>
+
+								<div class="mt-3 flex flex-wrap gap-1.5">
+									{#each preferenceSummary.slice(0, 4) as chip (chip)}
+										<span
+											class="rounded-full border border-[var(--border)] bg-[var(--surface)] px-2 py-1 text-[10px] font-medium text-[var(--muted)]"
+										>
+											{chip}
+										</span>
 									{/each}
 								</div>
 							</div>
@@ -1822,7 +2288,7 @@
 										<div
 											class="rounded-[22px] border border-dashed border-[var(--border)] bg-[var(--surface)] px-4 py-4 text-sm text-[var(--muted)]"
 										>
-											Double-click to pin.
+											Search for a destination above.
 										</div>
 									{:else if routeOptions.length === 0}
 										<div
@@ -1882,6 +2348,16 @@
 													</div>
 												</div>
 												<div class="mt-2 flex flex-wrap gap-1.5">
+													<span
+														class="inline-flex items-center gap-1 rounded-full bg-[var(--surface-muted)] px-2 py-1 text-[11px] text-[var(--muted)]"
+													>
+														{formatTollEstimate(route.estimatedTollCostUsd)}
+													</span>
+													<span
+														class="inline-flex items-center gap-1 rounded-full bg-[var(--surface-muted)] px-2 py-1 text-[11px] text-[var(--muted)]"
+													>
+														{formatFuelEstimate(route.estimatedFuelLiters)}
+													</span>
 													{#if route.incidentIds.length > 0}
 														<span
 															class="inline-flex items-center gap-1 rounded-full bg-[var(--surface-muted)] px-2 py-1 text-[11px] text-[var(--muted)]"
@@ -2045,30 +2521,32 @@
 				</div>
 
 				{#if activeTab === 'route'}
-					<div class="hidden">
+					<div class="w-full max-w-[420px]">
 						{#if routeSheetOpen || tripStatus === 'tracking'}
 							<div
-								class="overflow-hidden rounded-[32px] border border-white/10 bg-[rgba(11,13,17,0.9)] shadow-[0_28px_80px_rgba(0,0,0,0.42)] backdrop-blur-2xl"
+								class="overflow-hidden rounded-[32px] border border-black/8 bg-[rgba(248,248,246,0.98)] text-[#141414] shadow-[0_28px_80px_rgba(0,0,0,0.16)] backdrop-blur-2xl"
 							>
-								<div
-									class="border-b border-white/8 bg-[linear-gradient(180deg,rgba(10,14,20,0.96)_0%,rgba(7,9,13,0.9)_100%)] p-4"
-								>
+								<div class="border-b border-black/8 bg-[rgba(248,248,246,0.98)] p-4">
 									<div class="flex items-start justify-between gap-3">
 										<div class="min-w-0">
-											<p class="text-[10px] tracking-[0.28em] text-white/40 uppercase">
+											<p class="text-[10px] tracking-[0.28em] text-[var(--muted)] uppercase">
 												Plan and track
 											</p>
-											<p class="mt-2 truncate text-2xl font-semibold tracking-[-0.04em] text-white">
+											<p
+												class="mt-2 truncate text-2xl font-semibold tracking-[-0.04em] text-[#141414]"
+											>
 												{currentRouteDestinationLabel}
 											</p>
-											<p class="mt-1 text-sm text-white/58">{currentRouteDestinationDetail}</p>
+											<p class="mt-1 text-sm text-[var(--muted)]">
+												{currentRouteDestinationDetail}
+											</p>
 										</div>
 										<div class="flex shrink-0 items-center gap-2">
 											<span
 												class={`rounded-full px-3 py-1 text-xs font-semibold ${
 													navigationRoute
 														? getTrafficBadgeClass(navigationRoute.trafficLevel)
-														: 'bg-white/10 text-white/72'
+														: 'bg-[var(--surface-muted)] text-[var(--muted)]'
 												}`}
 											>
 												{navigationRoute
@@ -2079,7 +2557,7 @@
 												<button
 													type="button"
 													onclick={() => (routeSheetOpen = false)}
-													class="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-medium text-white/74 hover:bg-white/[0.08]"
+													class="rounded-full border border-black/8 bg-white px-3 py-1 text-xs font-medium text-black/62 hover:bg-[#f3f0ea]"
 												>
 													Hide
 												</button>
@@ -2087,10 +2565,12 @@
 										</div>
 									</div>
 
-									<div class="mt-4 rounded-[28px] border border-white/8 bg-black/35 p-4">
+									<div
+										class="mt-4 rounded-[28px] border border-black/6 bg-white p-4 shadow-[0_10px_28px_rgba(17,24,39,0.06)]"
+									>
 										<div class="flex items-center gap-4">
 											<div
-												class="flex h-16 w-16 shrink-0 items-center justify-center rounded-[22px] bg-white text-black"
+												class="flex h-16 w-16 shrink-0 items-center justify-center rounded-[22px] bg-[var(--surface-muted)] text-[#141414]"
 											>
 												{#if tripStatus === 'tracking'}
 													<svg
@@ -2122,37 +2602,43 @@
 											</div>
 
 											<div class="min-w-0">
-												<p class="text-[10px] tracking-[0.28em] text-white/38 uppercase">
+												<p class="text-[10px] tracking-[0.28em] text-[var(--muted)] uppercase">
 													{tripStatus === 'tracking' ? 'Live traffic route' : 'Pinned destination'}
 												</p>
-												<p class="mt-1 text-2xl font-semibold tracking-[-0.04em] text-white">
+												<p class="mt-1 text-2xl font-semibold tracking-[-0.04em] text-[#141414]">
 													{navigationRoute ? nextCueDistanceLabel : 'Ready to plan'}
 												</p>
-												<p class="truncate text-base font-medium text-[#55c6ff]">
+												<p class="truncate text-base font-medium text-[var(--primary)]">
 													{navigationRoute?.navigationCue.roadName ?? currentRouteDestinationLabel}
 												</p>
 											</div>
 										</div>
 
-										<p class="mt-4 text-sm leading-6 text-white/72">
+										<p class="mt-4 text-sm leading-6 text-[var(--muted)]">
 											{navigationRoute?.navigationCue.instruction ??
-												'Double-click anywhere on the map to move this pin. Traffic-aware routes load automatically.'}
+												'Search for a destination and traffic-aware routes will load automatically.'}
 										</p>
 
 										<div class="mt-4 grid grid-cols-3 gap-2">
-											<div class="rounded-[18px] border border-white/8 bg-white/[0.04] px-3 py-3">
-												<p class="text-[10px] tracking-[0.24em] text-white/38 uppercase">ETA</p>
-												<p class="mt-1 text-lg font-semibold text-white">{nextArrivalLabel}</p>
+											<div class="rounded-[18px] border border-black/6 bg-[#fcfbf8] px-3 py-3">
+												<p class="text-[10px] tracking-[0.24em] text-[var(--muted)] uppercase">
+													ETA
+												</p>
+												<p class="mt-1 text-lg font-semibold text-[#141414]">{nextArrivalLabel}</p>
 											</div>
-											<div class="rounded-[18px] border border-white/8 bg-white/[0.04] px-3 py-3">
-												<p class="text-[10px] tracking-[0.24em] text-white/38 uppercase">Trip</p>
-												<p class="mt-1 text-lg font-semibold text-white">
+											<div class="rounded-[18px] border border-black/6 bg-[#fcfbf8] px-3 py-3">
+												<p class="text-[10px] tracking-[0.24em] text-[var(--muted)] uppercase">
+													Trip
+												</p>
+												<p class="mt-1 text-lg font-semibold text-[#141414]">
 													{navigationRoute ? formatMinutes(navigationRoute.durationSec) : '--'}
 												</p>
 											</div>
-											<div class="rounded-[18px] border border-white/8 bg-white/[0.04] px-3 py-3">
-												<p class="text-[10px] tracking-[0.24em] text-white/38 uppercase">Traffic</p>
-												<p class="mt-1 truncate text-sm font-semibold text-white">
+											<div class="rounded-[18px] border border-black/6 bg-[#fcfbf8] px-3 py-3">
+												<p class="text-[10px] tracking-[0.24em] text-[var(--muted)] uppercase">
+													Traffic
+												</p>
+												<p class="mt-1 truncate text-sm font-semibold text-[#141414]">
 													{navigationRoute?.trafficSummary ?? 'Planning'}
 												</p>
 											</div>
@@ -2170,7 +2656,7 @@
 												class={`rounded-full border px-3 py-2 text-xs font-medium ${
 													routeDestination?.presetId === university.id
 														? 'border-[#f1deba] bg-[#f1deba] text-[#171717]'
-														: 'border-white/10 bg-white/[0.05] text-white/74 hover:bg-white/[0.08]'
+														: 'border-black/8 bg-white text-black/62 hover:bg-[#f3f0ea]'
 												} disabled:opacity-50`}
 											>
 												{university.shortName}
@@ -2180,7 +2666,7 @@
 											type="button"
 											onclick={() => void planRoute()}
 											disabled={!routeDestination || routeLoading || tripStatus === 'tracking'}
-											class="rounded-full border border-white/10 bg-white/[0.05] px-3 py-2 text-xs font-medium text-white/82 hover:bg-white/[0.08] disabled:opacity-50"
+											class="rounded-full border border-black/8 bg-white px-3 py-2 text-xs font-medium text-black/68 hover:bg-[#f3f0ea] disabled:opacity-50"
 										>
 											{routeLoading ? 'Refreshing...' : 'Refresh'}
 										</button>
@@ -2193,7 +2679,9 @@
 									{/if}
 
 									{#if routeMessage}
-										<div class="rounded-[18px] bg-[#f1deba]/12 px-4 py-3 text-sm text-[#f8e7c4]">
+										<div
+											class="rounded-[18px] border border-[#eadfbe] bg-[#fff8e8] px-4 py-3 text-sm text-[#6d5320]"
+										>
 											{routeMessage}
 										</div>
 									{/if}
@@ -2212,23 +2700,22 @@
 
 									{#if !routeDestination}
 										<div
-											class="rounded-[22px] border border-dashed border-white/10 bg-white/[0.04] px-4 py-4 text-sm text-white/64"
+											class="rounded-[22px] border border-dashed border-black/10 bg-white px-4 py-4 text-sm text-black/58"
 										>
-											Double-click anywhere on the map to choose a destination, or tap a campus chip
-											above for a quick preset.
+											Search for a destination, or tap a campus chip above for a quick preset.
 										</div>
 									{:else if routeLoading}
 										<div
-											class="rounded-[22px] border border-white/8 bg-white/[0.04] px-4 py-4 text-sm text-white/64"
+											class="rounded-[22px] border border-black/8 bg-white px-4 py-4 text-sm text-black/58"
 										>
 											Loading traffic-aware routes for {routeDestination.label}.
 										</div>
 									{:else if routeOptions.length === 0}
 										<div
-											class="rounded-[22px] border border-white/8 bg-white/[0.04] px-4 py-4 text-sm text-white/64"
+											class="rounded-[22px] border border-black/8 bg-white px-4 py-4 text-sm text-black/58"
 										>
-											No route options came back for this pin yet. Double-click nearby or refresh to
-											try again.
+											No route options came back for this destination yet. Search again or refresh
+											to try again.
 										</div>
 									{:else}
 										<div class="max-h-[260px] space-y-2 overflow-y-auto pr-1">
@@ -2239,14 +2726,14 @@
 													disabled={tripStatus === 'tracking'}
 													class={`block w-full rounded-[24px] border px-4 py-4 text-left transition ${
 														selectedRouteId === route.routeId
-															? 'border-[#55c6ff]/45 bg-[#55c6ff]/10'
-															: 'border-white/8 bg-white/[0.04] hover:bg-white/[0.06]'
+															? 'border-[#55c6ff]/45 bg-[#eef7ff]'
+															: 'border-black/8 bg-white hover:bg-[#faf7f1]'
 													} disabled:cursor-default disabled:opacity-85`}
 												>
 													<div class="flex items-start justify-between gap-3">
 														<div class="min-w-0">
-															<p class="text-sm font-medium text-white/90">{route.label}</p>
-															<p class="mt-1 text-xs text-white/54">
+															<p class="text-sm font-medium text-[#141414]">{route.label}</p>
+															<p class="mt-1 text-xs text-black/54">
 																Arrive {formatArrivalTime(route.arrivalTime)} • {formatMinutes(
 																	route.durationSec
 																)} • {formatDistance(route.distanceMeters)}
@@ -2268,24 +2755,24 @@
 														</div>
 													</div>
 
-													<p class="mt-3 text-sm text-white/70">
+													<p class="mt-3 text-sm text-black/70">
 														{route.navigationCue.instruction}
 													</p>
 
 													<div class="mt-3 flex flex-wrap gap-2">
 														<span
-															class="rounded-full bg-white/[0.05] px-2.5 py-1 text-xs text-white/62"
+															class="rounded-full bg-[#f4f1ea] px-2.5 py-1 text-xs text-black/62"
 														>
 															{route.trafficSummary}
 														</span>
 														<span
-															class="rounded-full bg-white/[0.05] px-2.5 py-1 text-xs text-white/62"
+															class="rounded-full bg-[#f4f1ea] px-2.5 py-1 text-xs text-black/62"
 														>
 															{route.incidentIds.length} incident matches
 														</span>
 														{#each route.explanationChips.slice(1, 4) as chip (chip)}
 															<span
-																class="rounded-full bg-white/[0.05] px-2.5 py-1 text-xs text-white/62"
+																class="rounded-full bg-[#f4f1ea] px-2.5 py-1 text-xs text-black/62"
 															>
 																{chip}
 															</span>
@@ -2312,14 +2799,14 @@
 												type="button"
 												onclick={markArrived}
 												disabled={tripStatus !== 'tracking' || tripBusy !== null}
-												class="rounded-[20px] border border-white/10 bg-white/[0.06] px-4 py-3 text-sm font-semibold text-white/86 disabled:opacity-50"
+												class="rounded-[20px] border border-black/10 bg-white px-4 py-3 text-sm font-semibold text-black/74 disabled:opacity-50"
 											>
 												{tripBusy === 'arriving' ? 'Saving...' : 'Arrived'}
 											</button>
 										</div>
-										<p class="text-xs text-white/50">
-											Traffic is shown on the map by default. Double-click anywhere to move the pin,
-											or tap a route line to switch before starting.
+										<p class="text-xs text-black/50">
+											Review the options, refresh if traffic changes, or pick a different
+											destination before starting.
 										</p>
 									{/if}
 								</div>
@@ -2328,15 +2815,17 @@
 							<button
 								type="button"
 								onclick={() => (routeSheetOpen = true)}
-								class="w-full rounded-[28px] border border-white/10 bg-[rgba(11,13,17,0.88)] p-4 text-left shadow-[0_24px_64px_rgba(0,0,0,0.32)] backdrop-blur-2xl"
+								class="w-full rounded-[28px] border border-black/8 bg-[rgba(248,248,246,0.98)] p-4 text-left shadow-[0_24px_64px_rgba(0,0,0,0.14)] backdrop-blur-2xl"
 							>
-								<p class="text-[10px] tracking-[0.28em] text-white/40 uppercase">Route ready</p>
+								<p class="text-[10px] tracking-[0.28em] text-[var(--muted)] uppercase">
+									Route ready
+								</p>
 								<div class="mt-2 flex items-center justify-between gap-3">
 									<div class="min-w-0">
-										<p class="truncate text-lg font-semibold text-white/92">
+										<p class="truncate text-lg font-semibold text-[#141414]">
 											{currentRouteDestinationLabel}
 										</p>
-										<p class="mt-1 truncate text-sm text-white/58">
+										<p class="mt-1 truncate text-sm text-[var(--muted)]">
 											{selectedRoute
 												? `${formatMinutes(selectedRoute.durationSec)} • ${selectedRoute.trafficSummary}`
 												: currentRouteDestinationDetail}
@@ -2351,14 +2840,16 @@
 							</button>
 						{:else}
 							<div
-								class="w-full rounded-[28px] border border-white/10 bg-[rgba(11,13,17,0.88)] p-4 shadow-[0_24px_64px_rgba(0,0,0,0.32)] backdrop-blur-2xl"
+								class="w-full rounded-[28px] border border-black/8 bg-[rgba(248,248,246,0.98)] p-4 shadow-[0_24px_64px_rgba(0,0,0,0.14)] backdrop-blur-2xl"
 							>
-								<p class="text-[10px] tracking-[0.28em] text-white/40 uppercase">Route mode</p>
-								<p class="mt-2 text-xl font-semibold tracking-[-0.04em] text-white/92">
-									Double-click anywhere to plan
+								<p class="text-[10px] tracking-[0.28em] text-[var(--muted)] uppercase">
+									Route mode
 								</p>
-								<p class="mt-2 text-sm leading-6 text-white/66">
-									Drop a pin on the map and the route sheet will appear with traffic-aware ETAs,
+								<p class="mt-2 text-xl font-semibold tracking-[-0.04em] text-[#141414]">
+									Search anywhere to plan
+								</p>
+								<p class="mt-2 text-sm leading-6 text-[var(--muted)]">
+									Search a destination and the route sheet will appear with traffic-aware ETAs,
 									alternatives, and trip tracking controls.
 								</p>
 								<div class="mt-4 flex flex-wrap gap-2">
@@ -2366,7 +2857,7 @@
 										<button
 											type="button"
 											onclick={() => choosePresetDestination(university)}
-											class="rounded-full border border-white/10 bg-white/[0.05] px-3 py-2 text-xs font-medium text-white/78 hover:bg-white/[0.08]"
+											class="rounded-full border border-black/8 bg-white px-3 py-2 text-xs font-medium text-black/68 hover:bg-[#f3f0ea]"
 										>
 											{university.shortName}
 										</button>
@@ -2377,12 +2868,12 @@
 					</div>
 				{:else}
 					<div
-						class={`pointer-events-auto flex w-full flex-col overflow-hidden backdrop-blur-2xl transition-all ${
+						class={`pointer-events-auto relative isolate flex w-full flex-col overflow-hidden transition-all ${
 							activeTab === 'pulse'
 								? `max-w-[520px] rounded-[32px] border border-black/8 bg-[rgba(249,250,252,0.97)] text-[#141414] shadow-[0_28px_80px_rgba(0,0,0,0.22)] ${
 										drawerExpanded ? 'max-h-[74svh] sm:max-h-[640px]' : 'max-h-[118px]'
 									}`
-								: `max-w-[680px] rounded-[32px] border border-[var(--border)] bg-[linear-gradient(180deg,rgba(255,253,248,0.98)_0%,rgba(247,241,230,0.94)_100%)] text-[var(--text)] shadow-[0_28px_80px_rgba(36,31,23,0.16)] ${
+								: `max-w-[680px] rounded-[32px] border border-black/8 bg-[rgba(248,248,246,0.98)] text-[#141414] shadow-[0_28px_80px_rgba(0,0,0,0.16)] ${
 										drawerExpanded ? 'max-h-[82svh]' : 'max-h-[188px]'
 									}`
 						}`}
@@ -2392,7 +2883,7 @@
 							onclick={() => (drawerExpanded = !drawerExpanded)}
 							class={activeTab === 'pulse'
 								? 'w-full px-5 pt-4 pb-3 text-left'
-								: 'w-full px-4 py-4 text-left sm:px-5'}
+								: 'relative z-10 w-full bg-[rgba(248,248,246,0.98)] px-4 py-4 text-left sm:px-5'}
 						>
 							{#if activeTab === 'pulse'}
 								<div class="flex flex-col items-center gap-2 pb-1">
@@ -2410,7 +2901,7 @@
 									<div class="min-w-0">
 										<div class="flex items-center gap-3">
 											<div
-												class="flex h-12 w-12 shrink-0 items-center justify-center rounded-[18px] bg-[var(--primary)] text-white shadow-[0_12px_28px_rgba(90,66,41,0.18)]"
+												class="flex h-12 w-12 shrink-0 items-center justify-center rounded-[18px] bg-white text-[#141414] shadow-[0_10px_28px_rgba(17,24,39,0.08)]"
 											>
 												<svg
 													viewBox="0 0 24 24"
@@ -2427,17 +2918,33 @@
 											</div>
 											<div class="min-w-0">
 												<div class="flex flex-wrap items-center gap-2">
+													<span
+														class="flex h-5 w-5 items-center justify-center rounded-full bg-[#f1f2f4] text-black/58"
+													>
+														<svg
+															viewBox="0 0 24 24"
+															class="h-3.5 w-3.5"
+															fill="none"
+															stroke="currentColor"
+															stroke-width="2"
+															stroke-linecap="round"
+															stroke-linejoin="round"
+														>
+															<circle cx="12" cy="8" r="3.5" />
+															<path d="M5 19a7 7 0 0 1 14 0" />
+														</svg>
+													</span>
 													<p class="text-[10px] tracking-[0.28em] text-[var(--muted)] uppercase">
-														Trust and history
+														Account
 													</p>
 													<span
-														class="rounded-full border border-[var(--border)] bg-white/75 px-2.5 py-1 text-[11px] font-medium text-[var(--muted)]"
+														class="rounded-full border border-black/8 bg-white px-2.5 py-1 text-[11px] font-medium text-black/60"
 													>
 														{getRoleLabel(meQuery.data?.role)}
 													</span>
 												</div>
 												<p
-													class="mt-1 truncate text-[1.55rem] font-semibold tracking-[-0.04em] text-[var(--text)]"
+													class="mt-1 truncate text-[1.55rem] font-semibold tracking-[-0.04em] text-[#141414]"
 												>
 													{meQuery.data?.displayName ?? panelCopy[activeTab].title}
 												</p>
@@ -2445,7 +2952,7 @@
 										</div>
 									</div>
 									<span
-										class="inline-flex shrink-0 items-center gap-2 rounded-full border border-[var(--border)] bg-white/75 px-3 py-1.5 text-xs font-medium text-[var(--muted)]"
+										class="inline-flex shrink-0 items-center gap-2 rounded-full border border-black/8 bg-white px-3 py-1.5 text-xs font-medium text-black/60"
 									>
 										{drawerExpanded ? 'Collapse' : 'Expand'}
 										<svg
@@ -2465,9 +2972,9 @@
 						</button>
 
 						<div
-							class={`min-h-0 overflow-y-auto border-t px-4 pb-4 ${
-								activeTab === 'pulse' ? 'border-black/8' : 'border-[var(--border)]'
-							}`}
+							class={`relative z-10 min-h-0 overflow-y-auto border-t px-4 pb-4 ${
+								activeTab === 'pulse' ? 'border-black/8' : 'border-black/8'
+							} ${activeTab === 'pulse' ? '' : 'bg-[rgba(248,248,246,0.98)]'}`}
 						>
 							{#if activeTab === 'pulse'}
 								<div class="px-1 pt-3 pb-4">
@@ -2518,11 +3025,11 @@
 								<div class="pt-4">
 									<div class="grid gap-3 sm:grid-cols-3">
 										<div
-											class="rounded-[24px] border border-[var(--border)] bg-white/80 px-4 py-4 shadow-[0_12px_30px_rgba(36,31,23,0.08)]"
+											class="rounded-[24px] border border-black/6 bg-white px-4 py-4 shadow-[0_10px_28px_rgba(17,24,39,0.06)]"
 										>
 											<div class="flex items-center gap-3">
 												<div
-													class="flex h-10 w-10 items-center justify-center rounded-[14px] bg-[var(--surface-muted)] text-[var(--primary)]"
+													class="flex h-10 w-10 items-center justify-center rounded-[14px] bg-[#f4f4f2] text-[#141414]"
 												>
 													<svg
 														viewBox="0 0 24 24"
@@ -2550,11 +3057,11 @@
 											</div>
 										</div>
 										<div
-											class="rounded-[24px] border border-[var(--border)] bg-white/80 px-4 py-4 shadow-[0_12px_30px_rgba(36,31,23,0.08)]"
+											class="rounded-[24px] border border-black/6 bg-white px-4 py-4 shadow-[0_10px_28px_rgba(17,24,39,0.06)]"
 										>
 											<div class="flex items-center gap-3">
 												<div
-													class="flex h-10 w-10 items-center justify-center rounded-[14px] bg-[var(--surface-muted)] text-[var(--primary)]"
+													class="flex h-10 w-10 items-center justify-center rounded-[14px] bg-[#f4f4f2] text-[#141414]"
 												>
 													<svg
 														viewBox="0 0 24 24"
@@ -2582,11 +3089,11 @@
 											</div>
 										</div>
 										<div
-											class="rounded-[24px] border border-[var(--border)] bg-white/80 px-4 py-4 shadow-[0_12px_30px_rgba(36,31,23,0.08)]"
+											class="rounded-[24px] border border-black/6 bg-white px-4 py-4 shadow-[0_10px_28px_rgba(17,24,39,0.06)]"
 										>
 											<div class="flex items-center gap-3">
 												<div
-													class="flex h-10 w-10 items-center justify-center rounded-[14px] bg-[var(--surface-muted)] text-[var(--primary)]"
+													class="flex h-10 w-10 items-center justify-center rounded-[14px] bg-[#f4f4f2] text-[#141414]"
 												>
 													<svg
 														viewBox="0 0 24 24"
@@ -2616,13 +3123,242 @@
 
 									{#if drawerExpanded}
 										<div class="mt-4 space-y-3">
+											<div
+												class="rounded-[24px] border border-black/6 bg-white px-4 py-4 shadow-[0_10px_28px_rgba(17,24,39,0.06)]"
+											>
+												<div class="flex items-start justify-between gap-3">
+													<div class="flex items-center gap-2">
+														<span
+															class="flex h-9 w-9 items-center justify-center rounded-[12px] bg-[#f4f4f2] text-[#141414]"
+														>
+															<svg
+																viewBox="0 0 24 24"
+																class="h-4.5 w-4.5"
+																fill="none"
+																stroke="currentColor"
+																stroke-width="2"
+																stroke-linecap="round"
+																stroke-linejoin="round"
+															>
+																<path d="M12 3v18" />
+																<path d="M3 12h18" />
+																<path d="m18 6 3-3" />
+																<path d="m3 21 3-3" />
+															</svg>
+														</span>
+														<div>
+															<p class="text-sm font-semibold text-[var(--text)]">
+																Route preferences
+															</p>
+															<p class="text-xs text-[var(--muted)]">Routing and comfort</p>
+														</div>
+													</div>
+													{#if routePreferencesSaving}
+														<span
+															class="rounded-full border border-black/8 bg-[#f8fafc] px-2.5 py-1 text-[11px] font-medium text-black/56"
+														>
+															Saving
+														</span>
+													{/if}
+												</div>
+
+												<div class="mt-4 grid gap-3 sm:grid-cols-2">
+													<label class="grid gap-1.5">
+														<span
+															class="inline-flex items-center gap-1.5 text-[11px] font-semibold tracking-[0.18em] text-[var(--muted)] uppercase"
+														>
+															<svg
+																viewBox="0 0 24 24"
+																class="h-3.5 w-3.5"
+																fill="none"
+																stroke="currentColor"
+																stroke-width="2"
+																stroke-linecap="round"
+																stroke-linejoin="round"
+															>
+																<circle cx="12" cy="12" r="8" />
+																<path d="M12 8v4l3 3" />
+															</svg>
+															Mode
+														</span>
+														<select
+															class="rounded-[16px] border border-black/8 bg-white px-3 py-2.5 text-sm text-[#141414] shadow-[0_6px_18px_rgba(17,24,39,0.04)]"
+															value={routingPreferences.mode}
+															onchange={handleRoutingModeChange}
+															disabled={routePreferencesSaving}
+														>
+															{#each ROUTING_MODES as mode (mode)}
+																<option value={mode}>{getRoutingModeLabel(mode)}</option>
+															{/each}
+														</select>
+													</label>
+
+													<label class="grid gap-1.5">
+														<span
+															class="inline-flex items-center gap-1.5 text-[11px] font-semibold tracking-[0.18em] text-[var(--muted)] uppercase"
+														>
+															<svg
+																viewBox="0 0 24 24"
+																class="h-3.5 w-3.5"
+																fill="none"
+																stroke="currentColor"
+																stroke-width="2"
+																stroke-linecap="round"
+																stroke-linejoin="round"
+															>
+																<path d="M3 6h18" />
+																<path d="M7 12h10" />
+																<path d="M10 18h4" />
+															</svg>
+															Cost priority
+														</span>
+														<select
+															class="rounded-[16px] border border-black/8 bg-white px-3 py-2.5 text-sm text-[#141414] shadow-[0_6px_18px_rgba(17,24,39,0.04)]"
+															value={routingPreferences.costPriority}
+															onchange={handleCostPriorityChange}
+															disabled={routePreferencesSaving}
+														>
+															{#each ROUTING_COST_PRIORITIES as priority (priority)}
+																<option value={priority}>{getCostPriorityLabel(priority)}</option>
+															{/each}
+														</select>
+													</label>
+												</div>
+
+												<div class="mt-4 grid gap-2 sm:grid-cols-2">
+													<button
+														type="button"
+														onclick={() =>
+															void updateRoutingPreferences({
+																avoidHighways: !routingPreferences.avoidHighways
+															})}
+														disabled={routePreferencesSaving}
+														class={`flex items-center gap-2 rounded-[18px] border px-3 py-3 text-left text-sm font-semibold ${
+															routingPreferences.avoidHighways
+																? 'border-[#1e88f7] bg-[#eef6ff] text-[#141414] shadow-[0_10px_24px_rgba(30,136,247,0.12)]'
+																: 'border-black/8 bg-white text-black/62 shadow-[0_8px_24px_rgba(17,24,39,0.05)]'
+														}`}
+													>
+														<svg
+															viewBox="0 0 24 24"
+															class="h-4 w-4 shrink-0"
+															fill="none"
+															stroke="currentColor"
+															stroke-width="2"
+															stroke-linecap="round"
+															stroke-linejoin="round"
+														>
+															<path d="M4 18h16" />
+															<path d="M6 18V8l4-2 4 2 4-2v12" />
+														</svg>
+														Avoid highways
+													</button>
+													<button
+														type="button"
+														onclick={() =>
+															void updateRoutingPreferences({
+																avoidUTurns: !routingPreferences.avoidUTurns
+															})}
+														disabled={routePreferencesSaving}
+														class={`flex items-center gap-2 rounded-[18px] border px-3 py-3 text-left text-sm font-semibold ${
+															routingPreferences.avoidUTurns
+																? 'border-[#1e88f7] bg-[#eef6ff] text-[#141414] shadow-[0_10px_24px_rgba(30,136,247,0.12)]'
+																: 'border-black/8 bg-white text-black/62 shadow-[0_8px_24px_rgba(17,24,39,0.05)]'
+														}`}
+													>
+														<svg
+															viewBox="0 0 24 24"
+															class="h-4 w-4 shrink-0"
+															fill="none"
+															stroke="currentColor"
+															stroke-width="2"
+															stroke-linecap="round"
+															stroke-linejoin="round"
+														>
+															<path d="M8 7v6a4 4 0 0 0 4 4h6" />
+															<path d="m14 13 4 4-4 4" />
+														</svg>
+														Avoid U-turns
+													</button>
+													<button
+														type="button"
+														onclick={() =>
+															void updateRoutingPreferences({
+																preferWellLitStreets: !routingPreferences.preferWellLitStreets
+															})}
+														disabled={routePreferencesSaving}
+														class={`flex items-center gap-2 rounded-[18px] border px-3 py-3 text-left text-sm font-semibold ${
+															routingPreferences.preferWellLitStreets
+																? 'border-[#1e88f7] bg-[#eef6ff] text-[#141414] shadow-[0_10px_24px_rgba(30,136,247,0.12)]'
+																: 'border-black/8 bg-white text-black/62 shadow-[0_8px_24px_rgba(17,24,39,0.05)]'
+														}`}
+													>
+														<svg
+															viewBox="0 0 24 24"
+															class="h-4 w-4 shrink-0"
+															fill="none"
+															stroke="currentColor"
+															stroke-width="2"
+															stroke-linecap="round"
+															stroke-linejoin="round"
+														>
+															<path d="M12 3v3" />
+															<path d="M18.4 5.6 16.2 7.8" />
+															<path d="M21 12h-3" />
+															<path d="m18.4 18.4-2.2-2.2" />
+															<path d="M12 21v-3" />
+															<path d="m5.6 18.4 2.2-2.2" />
+															<path d="M3 12h3" />
+															<path d="m5.6 5.6 2.2 2.2" />
+															<circle cx="12" cy="12" r="3" />
+														</svg>
+														Prefer lit streets
+													</button>
+													<button
+														type="button"
+														onclick={() =>
+															void updateRoutingPreferences({
+																preferFewerTurns: !routingPreferences.preferFewerTurns
+															})}
+														disabled={routePreferencesSaving}
+														class={`flex items-center gap-2 rounded-[18px] border px-3 py-3 text-left text-sm font-semibold ${
+															routingPreferences.preferFewerTurns
+																? 'border-[#1e88f7] bg-[#eef6ff] text-[#141414] shadow-[0_10px_24px_rgba(30,136,247,0.12)]'
+																: 'border-black/8 bg-white text-black/62 shadow-[0_8px_24px_rgba(17,24,39,0.05)]'
+														}`}
+													>
+														<svg
+															viewBox="0 0 24 24"
+															class="h-4 w-4 shrink-0"
+															fill="none"
+															stroke="currentColor"
+															stroke-width="2"
+															stroke-linecap="round"
+															stroke-linejoin="round"
+														>
+															<path d="M5 19V9a4 4 0 0 1 4-4h10" />
+															<path d="m15 3 4 2-4 2" />
+														</svg>
+														Prefer fewer turns
+													</button>
+												</div>
+
+												{#if routePreferencesError}
+													<div
+														class="mt-3 rounded-[16px] border border-[var(--danger)] bg-[var(--danger-soft)] px-3 py-2 text-xs font-medium text-[var(--danger)]"
+													>
+														{routePreferencesError}
+													</div>
+												{/if}
+											</div>
+
 											<a
 												href={resolve('/app/proof')}
-												class="flex items-center justify-between gap-3 border border-[var(--border)] bg-[var(--surface)] px-4 py-4 text-[var(--text)]"
+												class="flex items-center justify-between gap-3 rounded-[24px] border border-black/6 bg-white px-4 py-4 text-[#141414] shadow-[0_10px_28px_rgba(17,24,39,0.06)]"
 											>
 												<div class="flex min-w-0 items-center gap-3">
 													<div
-														class="flex h-10 w-10 shrink-0 items-center justify-center bg-[var(--surface-muted)] text-[var(--primary)]"
+														class="flex h-10 w-10 shrink-0 items-center justify-center rounded-[14px] bg-[#f4f4f2] text-[#141414]"
 													>
 														<svg
 															viewBox="0 0 24 24"
@@ -2642,12 +3378,8 @@
 														</svg>
 													</div>
 													<div class="min-w-0">
-														<p class="text-sm font-semibold text-[var(--text)]">
-															Open proof center
-														</p>
-														<p class="text-sm text-[var(--muted)]">
-															Issue and download certificates
-														</p>
+														<p class="text-sm font-semibold text-[var(--text)]">Proof Center</p>
+														<p class="text-xs text-[var(--muted)]">Certificates and records</p>
 													</div>
 												</div>
 												<svg
@@ -2665,24 +3397,44 @@
 											</a>
 
 											{#if myIncidents.length === 0}
-												<p
-													class="border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-sm text-[var(--muted)]"
+												<div
+													class="flex items-center gap-3 rounded-[24px] border border-black/6 bg-white px-4 py-4 text-sm text-black/60 shadow-[0_10px_28px_rgba(17,24,39,0.06)]"
 												>
-													No recent reports.
-												</p>
+													<span
+														class="flex h-10 w-10 items-center justify-center rounded-[14px] bg-[#f4f4f2] text-[#141414]"
+													>
+														<svg
+															viewBox="0 0 24 24"
+															class="h-5 w-5"
+															fill="none"
+															stroke="currentColor"
+															stroke-width="2"
+															stroke-linecap="round"
+															stroke-linejoin="round"
+														>
+															<path d="M4 19h16" />
+															<path d="M7 16V9" />
+															<path d="M12 16V5" />
+															<path d="M17 16v-3" />
+														</svg>
+													</span>
+													<p>No reports yet.</p>
+												</div>
 											{:else}
-												<div class="border border-[var(--border)] bg-[var(--surface)]">
-													<div class="border-b border-[var(--border)] px-4 py-3">
-														<p class="text-sm font-semibold text-[var(--text)]">Recent reports</p>
+												<div
+													class="overflow-hidden rounded-[24px] border border-black/6 bg-white shadow-[0_10px_28px_rgba(17,24,39,0.06)]"
+												>
+													<div class="border-b border-black/6 px-4 py-3">
+														<p class="text-sm font-semibold text-[#141414]">Recent reports</p>
 													</div>
-													<div class="divide-y divide-[var(--border)]">
+													<div class="divide-y divide-black/6">
 														{#each myIncidents.slice(0, 3) as incident (incident._id)}
 															<div class="flex items-center justify-between gap-3 px-4 py-3">
 																<div class="min-w-0">
-																	<p class="truncate text-sm font-medium text-[var(--text)]">
+																	<p class="truncate text-sm font-medium text-[#141414]">
 																		{INCIDENT_LABELS[incident.type].en}
 																	</p>
-																	<p class="text-sm text-[var(--muted)]">
+																	<p class="text-sm text-black/56">
 																		{formatShortDate(incident.createdAt)}
 																	</p>
 																</div>

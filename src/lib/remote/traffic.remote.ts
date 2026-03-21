@@ -2,6 +2,7 @@ import { command, getRequestEvent, query } from '$app/server';
 import { Effect } from 'effect';
 import { api } from '../../convex/_generated/api';
 import type { Id } from '../../convex/_generated/dataModel';
+import { DEFAULT_ROUTING_PREFERENCES, type RoutingPreferences } from '$lib/domain/routing';
 import { effectRunner, createGenericError } from '$lib/runtime';
 import { CITY, UNIVERSITY_SEEDS, type GeoPoint, type UniversityId } from '$lib/domain/traffic';
 import { requestRankedRoutes } from '$lib/services/route-engine';
@@ -42,11 +43,19 @@ const getAuthenticatedTrafficUser = Effect.gen(function* () {
 
 export const requestRoute = query(
 	'unchecked',
-	async ({ origin, destination }: { origin: GeoPoint; destination: GeoPoint }) =>
+	async ({
+		origin,
+		destination,
+		preferences = DEFAULT_ROUTING_PREFERENCES
+	}: {
+		origin: GeoPoint;
+		destination: GeoPoint;
+		preferences?: RoutingPreferences;
+	}) =>
 		await effectRunner(
 			Effect.gen(function* () {
 				yield* getAuthenticatedTrafficUser;
-				return yield* requestRankedRoutes({ origin, destination }).pipe(
+				return yield* requestRankedRoutes({ origin, destination, preferences }).pipe(
 					Effect.mapError((error) =>
 						createGenericError({
 							message: error instanceof Error ? error.message : 'Unable to request routes.',
@@ -97,17 +106,19 @@ export const startTrip = command(
 	async ({
 		routeId,
 		origin,
-		destination
+		destination,
+		preferences = DEFAULT_ROUTING_PREFERENCES
 	}: {
 		routeId: string;
 		origin: GeoPoint;
 		destination: GeoPoint;
+		preferences?: RoutingPreferences;
 	}) =>
 		await effectRunner(
 			Effect.gen(function* () {
 				const { trafficUser } = yield* getAuthenticatedTrafficUser;
 				const convex = yield* ConvexPrivateService;
-				const rankedRoutes = yield* requestRankedRoutes({ origin, destination }).pipe(
+				const rankedRoutes = yield* requestRankedRoutes({ origin, destination, preferences }).pipe(
 					Effect.mapError((error) =>
 						createGenericError({
 							message: error instanceof Error ? error.message : 'Unable to request routes.',
@@ -144,6 +155,7 @@ export const startTrip = command(
 						),
 						incidentIds: selectedRoute.incidentIds,
 						shortcutIds: selectedRoute.shortcutIds,
+						preferenceSnapshot: preferences,
 						startedAt: Date.now()
 					}
 				});

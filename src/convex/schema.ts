@@ -18,6 +18,27 @@ const incidentStatusValidator = v.union(v.literal('active'), v.literal('expired'
 const proofStatusValidator = v.union(v.literal('valid'), v.literal('revoked'));
 const userRoleValidator = v.union(v.literal('citizen'), v.literal('campus_rep'));
 const universityIdValidator = v.union(v.literal('rupp'), v.literal('itc'), v.literal('num'));
+const routingModeValidator = v.union(
+	v.literal('car'),
+	v.literal('scooter'),
+	v.literal('bike'),
+	v.literal('pedestrian'),
+	v.literal('heavy_vehicle')
+);
+const routingCostPriorityValidator = v.union(
+	v.literal('balanced'),
+	v.literal('fastest'),
+	v.literal('lowest_tolls'),
+	v.literal('lowest_fuel')
+);
+const routingPreferencesValidator = v.object({
+	avoidHighways: v.boolean(),
+	avoidUTurns: v.boolean(),
+	preferWellLitStreets: v.boolean(),
+	preferFewerTurns: v.boolean(),
+	mode: routingModeValidator,
+	costPriority: routingCostPriorityValidator
+});
 const routeOptionValidator = v.object({
 	routeId: v.string(),
 	providerRouteId: v.optional(v.string()),
@@ -26,6 +47,8 @@ const routeOptionValidator = v.object({
 	distanceMeters: v.number(),
 	durationSec: v.number(),
 	adjustedScore: v.number(),
+	estimatedFuelLiters: v.optional(v.number()),
+	estimatedTollCostUsd: v.optional(v.number()),
 	explanationChips: v.array(v.string()),
 	incidentIds: v.array(v.id('incidents')),
 	shortcutIds: v.array(v.id('shortcutSegments'))
@@ -42,6 +65,7 @@ export default defineSchema({
 		role: userRoleValidator,
 		city: cityValidator,
 		homeUniversityId: v.optional(universityIdValidator),
+		routingPreferences: v.optional(routingPreferencesValidator),
 		createdAt: v.number(),
 		lastActiveAt: v.number()
 	}).index('by_clerk', ['clerkId']),
@@ -86,6 +110,7 @@ export default defineSchema({
 		alternativeRoutes: v.array(routeOptionValidator),
 		incidentIds: v.array(v.id('incidents')),
 		shortcutIds: v.array(v.id('shortcutSegments')),
+		preferenceSnapshot: v.optional(routingPreferencesValidator),
 		startedAt: v.number(),
 		arrivedAt: v.optional(v.number()),
 		locationSamplesCount: v.number(),
