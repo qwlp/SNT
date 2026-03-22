@@ -3049,32 +3049,6 @@
 									</span>
 								</div>
 							</button>
-						{:else}
-							<div
-								class="w-full rounded-[28px] border border-[var(--border)] bg-white/95 p-4 shadow-[var(--shadow-float)] backdrop-blur-2xl"
-							>
-								<p class="text-[10px] tracking-[0.28em] text-[var(--muted)] uppercase">
-									Route mode
-								</p>
-								<p class="mt-2 text-xl font-semibold tracking-[-0.04em] text-[var(--text)]">
-									Search anywhere to plan
-								</p>
-								<p class="mt-2 text-sm leading-6 text-[var(--muted)]">
-									Search a destination and the route sheet will appear with traffic-aware ETAs,
-									alternatives, and trip tracking controls.
-								</p>
-								<div class="mt-4 flex flex-wrap gap-2">
-									{#each UNIVERSITY_SEEDS as university (university.id)}
-										<button
-											type="button"
-											onclick={() => choosePresetDestination(university)}
-											class="rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-xs font-medium text-[var(--muted)] hover:bg-[var(--primary-soft)]"
-										>
-											{university.shortName}
-										</button>
-									{/each}
-								</div>
-							</div>
 						{/if}
 					</div>
 				{:else}
