@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 
-	type AppSection = 'pulse' | 'route' | 'proof' | 'account';
+	type AppSection = 'pulse' | 'route' | 'account';
 
 	interface SummaryItem {
 		label: string;
@@ -16,12 +16,11 @@
 		summary?: SummaryItem[];
 	} = $props();
 
-	type NavPath = '/app?tab=pulse' | '/app?tab=route' | '/app/proof' | '/app?tab=account';
+	type NavPath = '/app?tab=pulse' | '/app?tab=route' | '/app?tab=account';
 
 	const navItems: Array<{ id: AppSection; label: string; path: NavPath }> = [
 		{ id: 'pulse', label: 'Report', path: '/app?tab=pulse' },
 		{ id: 'route', label: 'Route', path: '/app?tab=route' },
-		{ id: 'proof', label: 'Proof', path: '/app/proof' },
 		{ id: 'account', label: 'Account', path: '/app?tab=account' }
 	];
 </script>
@@ -79,21 +78,6 @@
 									<path d="M8.5 16l7-7" />
 									<path d="M10.5 6h4.5v4.5" />
 								</svg>
-							{:else if item.id === 'proof'}
-								<svg
-									viewBox="0 0 24 24"
-									class="h-5 w-5"
-									fill="none"
-									stroke="currentColor"
-									stroke-width="2"
-									stroke-linecap="round"
-									stroke-linejoin="round"
-								>
-									<path d="M7 4.5h7l3 3V19a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6.5a2 2 0 0 1 2-2Z" />
-									<path d="M14 4.5V8h3" />
-									<path d="M8 12h8" />
-									<path d="M8 16h5" />
-								</svg>
 							{:else}
 								<svg
 									viewBox="0 0 24 24"
@@ -133,7 +117,7 @@
 		<nav
 			class="border border-[var(--border)] bg-white/95 p-2 shadow-[var(--shadow-soft)] backdrop-blur-xl"
 		>
-			<div class="grid grid-cols-4 gap-2">
+			<div class="grid grid-cols-3 gap-2">
 				{#each navItems as item (item.id)}
 					<a
 						href={resolve(item.path)}
@@ -176,21 +160,6 @@
 									<circle cx="17.5" cy="6.5" r="2.5" />
 									<path d="M8.5 16l7-7" />
 									<path d="M10.5 6h4.5v4.5" />
-								</svg>
-							{:else if item.id === 'proof'}
-								<svg
-									viewBox="0 0 24 24"
-									class="h-4 w-4"
-									fill="none"
-									stroke="currentColor"
-									stroke-width="2"
-									stroke-linecap="round"
-									stroke-linejoin="round"
-								>
-									<path d="M7 4.5h7l3 3V19a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6.5a2 2 0 0 1 2-2Z" />
-									<path d="M14 4.5V8h3" />
-									<path d="M8 12h8" />
-									<path d="M8 16h5" />
 								</svg>
 							{:else}
 								<svg

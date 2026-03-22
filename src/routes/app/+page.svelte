@@ -36,7 +36,7 @@
 	import type { Id } from '../../convex/_generated/dataModel';
 
 	type AppTab = 'pulse' | 'route' | 'account';
-	type DockHref = '/app?tab=pulse' | '/app?tab=route' | '/app?tab=account' | '/app/proof';
+	type DockHref = '/app?tab=pulse' | '/app?tab=route' | '/app?tab=account';
 	type TripSyncMode = 'remote' | 'local';
 	type RouteResponse = RankedClientRouteResult;
 	type StoredRouteOption = {
@@ -142,11 +142,10 @@
 		clerkContext.currentUser ? {} : 'skip'
 	);
 
-	const dockItems: Array<{ id: AppTab | 'proof'; label: string; href: DockHref }> = [
+	const dockItems: Array<{ id: AppTab; label: string; href: DockHref }> = [
 		{ id: 'pulse', label: 'Report', href: '/app?tab=pulse' },
 		{ id: 'route', label: 'Route', href: '/app?tab=route' },
-		{ id: 'account', label: 'Account', href: '/app?tab=account' },
-		{ id: 'proof', label: 'Proof', href: '/app/proof' }
+		{ id: 'account', label: 'Account', href: '/app?tab=account' }
 	];
 
 	const panelCopy: Record<AppTab, { title: string; subtitle: string }> = {
@@ -3536,50 +3535,6 @@
 													</div>
 												{/if}
 											</div>
-
-											<a
-												href={resolve('/app/proof')}
-												class="flex items-center justify-between gap-3 rounded-[24px] border border-black/6 bg-white px-4 py-4 text-[#141414] shadow-[0_10px_28px_rgba(17,24,39,0.06)]"
-											>
-												<div class="flex min-w-0 items-center gap-3">
-													<div
-														class="flex h-10 w-10 shrink-0 items-center justify-center rounded-[14px] bg-[#f4f4f2] text-[#141414]"
-													>
-														<svg
-															viewBox="0 0 24 24"
-															class="h-5 w-5"
-															fill="none"
-															stroke="currentColor"
-															stroke-width="2"
-															stroke-linecap="round"
-															stroke-linejoin="round"
-														>
-															<path
-																d="M7 4.5h7l3 3V19a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6.5a2 2 0 0 1 2-2Z"
-															/>
-															<path d="M14 4.5V8h3" />
-															<path d="M8 12h8" />
-															<path d="M8 16h5" />
-														</svg>
-													</div>
-													<div class="min-w-0">
-														<p class="text-sm font-semibold text-[var(--text)]">Proof Center</p>
-														<p class="text-xs text-[var(--muted)]">Certificates and records</p>
-													</div>
-												</div>
-												<svg
-													viewBox="0 0 24 24"
-													class="h-4 w-4 shrink-0 text-[var(--muted)]"
-													fill="none"
-													stroke="currentColor"
-													stroke-width="2"
-													stroke-linecap="round"
-													stroke-linejoin="round"
-												>
-													<path d="M5 12h14" />
-													<path d="m13 5 7 7-7 7" />
-												</svg>
-											</a>
 
 											{#if myIncidents.length === 0}
 												<div

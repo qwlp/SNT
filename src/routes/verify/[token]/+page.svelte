@@ -97,7 +97,7 @@
 								Download PDF
 							</a>
 							<a
-								href={resolve('/app/proof')}
+								href={resolve('/app')}
 								class="block rounded-[8px] border border-[var(--border)] bg-[var(--surface-muted)] px-4 py-3 text-center text-sm font-medium text-[var(--text)] hover:border-[var(--border-strong)] hover:bg-[var(--primary-soft)]"
 							>
 								Open SNT app

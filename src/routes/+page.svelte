@@ -49,7 +49,7 @@
 			<div>
 				<p class="text-lg font-semibold">SNT</p>
 				<p class="mt-1 text-sm text-[var(--muted)]">
-					Incident reporting, route planning, and verified lateness proof for Phnom Penh riders.
+					Incident reporting and route planning for Phnom Penh riders.
 				</p>
 			</div>
 			<div class="flex flex-wrap gap-3">
@@ -81,17 +81,16 @@
 				<div class="space-y-6">
 					<div>
 						<h1 class="max-w-3xl text-4xl font-semibold sm:text-5xl">
-							A practical commuter app for traffic reports, alternate routes, and university delay
-							proof.
+							A practical commuter app for traffic reports and alternate routes.
 						</h1>
 						<p class="mt-4 max-w-2xl text-base leading-7 text-[var(--muted)] sm:text-lg">
 							SNT is built around the daily Phnom Penh commute. Riders can report floods, VIP
-							closures, and police checks, compare motorbike-first route options, and generate a
-							certificate only when a tracked trip shows a real delay.
+							closures, and police checks, then compare motorbike-first route options with local
+							context already applied.
 						</p>
 					</div>
 
-					<div class="grid gap-4 md:grid-cols-3">
+					<div class="grid gap-4 md:grid-cols-2">
 						<section
 							class="rounded-[10px] border border-[var(--border)] bg-[var(--surface)] p-4 shadow-[var(--shadow-soft)]"
 						>
@@ -106,15 +105,6 @@
 							<h2 class="text-base font-semibold">Route</h2>
 							<p class="mt-2 text-sm leading-6 text-[var(--muted)]">
 								Compare nearby options with shortcut bonuses and incident penalties already applied.
-							</p>
-						</section>
-						<section
-							class="rounded-[10px] border border-[var(--border)] bg-[var(--surface)] p-4 shadow-[var(--shadow-soft)]"
-						>
-							<h2 class="text-base font-semibold">Proof</h2>
-							<p class="mt-2 text-sm leading-6 text-[var(--muted)]">
-								Issue a verifiable PDF only after the trip is recorded and the delay threshold is
-								met.
 							</p>
 						</section>
 					</div>
@@ -157,7 +147,7 @@
 							tracking.
 						</li>
 						<li class="rounded-[10px] border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
-							3. Proof is only issued from tracked sessions that meet the lateness threshold.
+							3. Active incidents are time-boxed so stale reports do not linger in the feed.
 						</li>
 					</ol>
 				</div>
@@ -181,9 +171,7 @@
 			class="border-t border-[var(--border)] pt-5 text-sm text-[var(--muted)] sm:flex sm:items-center sm:justify-between"
 		>
 			<p>Phnom Penh pilot for RUPP, ITC, and NUM.</p>
-			<p class="mt-2 sm:mt-0">
-				Motorbike routes, incident reports, and delay certificates in one app.
-			</p>
+			<p class="mt-2 sm:mt-0">Motorbike routes and incident reports in one app.</p>
 		</footer>
 	</div>
 </div>
