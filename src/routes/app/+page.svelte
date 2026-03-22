@@ -7,6 +7,7 @@
 	import MapSurface from '$lib/components/MapSurface.svelte';
 	import IncidentTypeIcon from '$lib/components/IncidentTypeIcon.svelte';
 	import { getClerkContext } from '$lib/stores/clerk.svelte';
+	import type { WeatherSnapshot } from '$lib/domain/weather';
 	import {
 		DEFAULT_ROUTING_PREFERENCES,
 		ROUTING_COST_PRIORITIES,
@@ -38,6 +39,7 @@
 	type AppTab = 'pulse' | 'route' | 'account';
 	type DockHref = '/app?tab=pulse' | '/app?tab=route' | '/app?tab=account';
 	type TripSyncMode = 'remote' | 'local';
+	type ReportSheetState = 'collapsed' | 'half' | 'full';
 	type RouteResponse = RankedClientRouteResult;
 	type StoredRouteOption = {
 		routeId: string;
@@ -162,6 +164,14 @@
 			subtitle: 'Trust and history'
 		}
 	};
+	const REPORT_TYPE_LABELS: Record<IncidentType, string> = {
+		roadblock: 'Hazard',
+		flood: 'Flooding',
+		accident: 'Crash',
+		vip: 'Closure',
+		wedding: 'Event',
+		police: 'Police'
+	};
 
 	const formatMinutes = (durationSec: number) => `${Math.max(1, Math.round(durationSec / 60))} min`;
 	const formatDistance = (distanceMeters: number) =>
@@ -178,11 +188,12 @@
 			minute: '2-digit'
 		});
 	const getTrafficBadgeClass = (level: TrafficLevel) => {
-		if (level === 'severe') return 'bg-[#ff4d4f] text-white';
-		if (level === 'heavy') return 'bg-[#ff8f1f] text-[#1b1406]';
-		if (level === 'moderate') return 'bg-[#ffd45a] text-[#1f1702]';
-		if (level === 'light') return 'bg-[#89e77b] text-[#0f1a0a]';
-		return 'bg-[#7dd3fc] text-[#07161f]';
+		if (level === 'severe') return 'border border-[#fecaca] bg-[#fff1f2] text-[#b42318]';
+		if (level === 'heavy') return 'border border-[#f6c78e] bg-[#fff2e2] text-[#9a4d00]';
+		if (level === 'moderate')
+			return 'border border-[var(--warning-border)] bg-[var(--warning-soft)] text-[var(--warning)]';
+		if (level === 'light') return 'border border-[#b7e6d4] bg-[#eefbf5] text-[#166534]';
+		return 'border border-[#b6dcff] bg-[#edf6ff] text-[#0f5fcb]';
 	};
 	const getTrafficLabel = (level: TrafficLevel) => {
 		if (level === 'severe') return 'Severe';
@@ -218,6 +229,28 @@
 			day: 'numeric'
 		});
 	const formatPointLabel = (point: GeoPoint) => `${point.lat.toFixed(4)}, ${point.lng.toFixed(4)}`;
+	const formatTemperature = (value: number) => `${Math.round(value)}°C`;
+	const formatWindSpeed = (value: number) => `${Math.round(value)} km/h`;
+	const formatRainChance = (snapshot: WeatherSnapshot | null) =>
+		snapshot
+			? snapshot.isRainingNow
+				? 'Raining now'
+				: snapshot.willRainSoon
+					? snapshot.nextRainEtaHours === 0
+						? 'Rain within 1h'
+						: `Rain in ${snapshot.nextRainEtaHours}h`
+					: 'Dry for now'
+			: 'Checking rain';
+	const getWeatherSummaryPill = (snapshot: WeatherSnapshot | null) =>
+		snapshot
+			? `${snapshot.conditionLabel} • ${formatRainChance(snapshot)}`
+			: 'Checking local weather';
+	const getWeatherIcon = (snapshot: WeatherSnapshot | null) => {
+		if (snapshot?.isStormingNow) return 'storm';
+		if (snapshot?.isRainingNow) return 'rain';
+		if (snapshot?.willRainSoon) return 'watch';
+		return 'clear';
+	};
 	const buildGoogleMapsDirectionsHref = (
 		destination: GeoPoint,
 		origin?: GeoPoint | null,
@@ -353,13 +386,13 @@
 	let activeTripId = $state<Id<'routeSessions'> | null>(null);
 	let activeTrip = $state<ActiveTripSnapshot | null>(null);
 	let activeTripSyncMode = $state<TripSyncMode>('remote');
-	let tripStatus = $state<'idle' | 'tracking' | 'completed'>('idle');
+	let tripStatus = $state<'idle' | 'tracking'>('idle');
 	let tripBusy = $state<'starting' | 'arriving' | null>(null);
 	let tripMessage = $state<string | null>(null);
 	let tripError = $state<string | null>(null);
 	let selectedRouteId = $state<string | null>(null);
 	let locationInterval = $state<number | null>(null);
-	let reportDrawerExpanded = $state(true);
+	let reportSheetState = $state<ReportSheetState>('collapsed');
 	let accountDrawerExpanded = $state(true);
 	let routeRequestId = $state(0);
 	let profileSyncRequest: Promise<unknown> | null = null;
@@ -373,6 +406,10 @@
 	let searchLoading = $state(false);
 	let searchError = $state<string | null>(null);
 	let searchRequestId = $state(0);
+	let weather = $state<WeatherSnapshot | null>(null);
+	let weatherLoading = $state(false);
+	let weatherError = $state<string | null>(null);
+	let weatherRequestId = $state(0);
 	let pendingRouteRequestCount = 0;
 
 	const activeTab = $derived.by((): AppTab => {
@@ -449,7 +486,7 @@
 	);
 	const drawerExpanded = $derived(
 		activeTab === 'pulse'
-			? reportDrawerExpanded
+			? reportSheetState !== 'collapsed'
 			: activeTab === 'account'
 				? accountDrawerExpanded
 				: true
@@ -564,6 +601,15 @@
 
 		return chips;
 	});
+	const weatherTargetLocation = $derived(currentLocation ?? PHNOM_PENH_CENTER);
+	const weatherLocationKey = $derived(
+		`${weatherTargetLocation.lat.toFixed(2)},${weatherTargetLocation.lng.toFixed(2)}`
+	);
+	const reportSheetHeightClass = $derived.by(() => {
+		if (reportSheetState === 'full') return 'h-[72svh] sm:h-[76svh]';
+		if (reportSheetState === 'half') return 'h-[28svh] sm:h-[300px]';
+		return 'h-[88px]';
+	});
 	const withTimeout = <T,>(promise: Promise<T>, timeoutMs: number, message: string) =>
 		new Promise<T>((resolve, reject) => {
 			const timeoutId = window.setTimeout(() => {
@@ -591,6 +637,42 @@
 		}
 
 		return 'border-[#f0dfb5] bg-[#fff7e2] text-[#6d5320]';
+	};
+	const loadWeather = async (location: GeoPoint) => {
+		const requestId = weatherRequestId + 1;
+		weatherRequestId = requestId;
+		weatherLoading = true;
+		weatherError = null;
+
+		try {
+			const searchParams = new URLSearchParams({
+				lat: location.lat.toFixed(4),
+				lng: location.lng.toFixed(4)
+			});
+			const response = await fetch(`/api/weather?${searchParams.toString()}`);
+
+			if (!response.ok) {
+				throw new Error('Unable to load weather.');
+			}
+
+			const payload = (await response.json()) as WeatherSnapshot;
+
+			if (requestId !== weatherRequestId) {
+				return;
+			}
+
+			weather = payload;
+		} catch (error) {
+			if (requestId !== weatherRequestId) {
+				return;
+			}
+
+			weatherError = formatError(error, 'Unable to load weather.');
+		} finally {
+			if (requestId === weatherRequestId) {
+				weatherLoading = false;
+			}
+		}
 	};
 	const runPlaceSearch = async (query = searchQuery) => {
 		const trimmedQuery = query.trim();
@@ -735,7 +817,7 @@
 		tripStatus = 'tracking';
 		routeSheetOpen = true;
 		stopTripSampling();
-		tripMessage = `Trip started to ${target.label}. Cloud sync is unavailable, so tracking is local on this device.`;
+		tripMessage = null;
 	};
 
 	const updateRoutingPreferences = async (patch: Partial<RoutingPreferences>) => {
@@ -844,6 +926,9 @@
 		tripBusy = 'starting';
 		tripError = null;
 		tripMessage = null;
+		activeTripId = null;
+		activeTrip = null;
+		activeTripSyncMode = 'remote';
 		try {
 			const session = await withTimeout(
 				convex.mutation(createRouteSessionMutation, {
@@ -914,8 +999,7 @@
 		try {
 			if (!activeTripId || activeTripSyncMode === 'local') {
 				stopTripSampling();
-				tripStatus = 'completed';
-				tripMessage = `Trip completed for ${activeTrip.destinationName}. Local-only tracking was used because cloud sync was unavailable.`;
+				tripStatus = 'idle';
 				activeTripId = null;
 				activeTrip = null;
 				activeTripSyncMode = 'remote';
@@ -937,8 +1021,7 @@
 			}
 
 			stopTripSampling();
-			tripStatus = 'completed';
-			tripMessage = `Trip completed for ${activeTrip.destinationName}.`;
+			tripStatus = 'idle';
 			activeTripId = null;
 			activeTrip = null;
 			activeTripSyncMode = 'remote';
@@ -959,7 +1042,7 @@
 		if (!location || !locationMode) {
 			reportError = 'Drop a pin on the map or wait for GPS before reporting.';
 			reportFeedback = null;
-			reportDrawerExpanded = true;
+			reportSheetState = 'half';
 			return;
 		}
 
@@ -975,7 +1058,7 @@
 			});
 
 			reportNote = '';
-			reportDrawerExpanded = false;
+			reportSheetState = 'half';
 			reportLocation = null;
 			reportLocationMode = null;
 			reportFeedback = `${INCIDENT_LABELS[type].en} reported successfully at ${locationMode === 'gps' ? 'your live location' : 'the pinned spot'}.`;
@@ -1000,18 +1083,46 @@
 		reportLocationMode = mode;
 		reportFeedback = null;
 		reportError = null;
-		reportDrawerExpanded = true;
+		if (reportSheetState === 'collapsed') {
+			reportSheetState = 'half';
+		}
 	};
 
+	const cycleReportSheet = () => {
+		if (reportSheetState === 'collapsed') {
+			reportSheetState = 'half';
+			return;
+		}
+
+		if (reportSheetState === 'half') {
+			reportSheetState = 'full';
+			return;
+		}
+
+		reportSheetState = 'collapsed';
+	};
+	const setReportSheetState = (next: ReportSheetState) => {
+		reportSheetState = next;
+	};
 	const toggleActiveDrawer = () => {
 		if (activeTab === 'pulse') {
-			reportDrawerExpanded = !reportDrawerExpanded;
+			cycleReportSheet();
 			return;
 		}
 
 		if (activeTab === 'account') {
 			accountDrawerExpanded = !accountDrawerExpanded;
 		}
+	};
+	const handleQuickReportAction = () => {
+		if (activeTab !== 'pulse') return;
+
+		if (reportSheetState === 'collapsed') {
+			reportSheetState = 'half';
+			return;
+		}
+
+		void submitIncident(selectedType);
 	};
 
 	const pickReportLocationFromMap = (point: GeoPoint) => {
@@ -1065,6 +1176,7 @@
 			reportError = null;
 			reportLocation = null;
 			reportLocationMode = null;
+			reportSheetState = 'collapsed';
 			routeDestination = null;
 			routeSheetOpen = false;
 			routeResult = null;
@@ -1142,6 +1254,25 @@
 		const timeoutId = window.setTimeout(() => {
 			void runPlaceSearch(trimmedQuery);
 		}, 280);
+
+		return () => {
+			window.clearTimeout(timeoutId);
+		};
+	});
+
+	$effect(() => {
+		if (!isSignedIn || activeTab !== 'pulse') {
+			return;
+		}
+
+		const location = weatherTargetLocation;
+		const locationKey = weatherLocationKey;
+
+		void locationKey;
+
+		const timeoutId = window.setTimeout(() => {
+			void loadWeather(location);
+		}, 120);
 
 		return () => {
 			window.clearTimeout(timeoutId);
@@ -1265,7 +1396,7 @@
 					}`}
 				>
 					<div
-						class="rounded-full border border-[var(--border)] bg-white/95 p-1 shadow-[var(--shadow-panel)] backdrop-blur-xl sm:[&_button]:scale-110 sm:[&_button]:transform-gpu sm:[&_button]:transition-transform"
+						class="rounded-full border border-[var(--border)] bg-[var(--surface)] p-1 shadow-[var(--shadow-panel)] sm:[&_button]:scale-110 sm:[&_button]:transform-gpu sm:[&_button]:transition-transform"
 						{@attach (element) => {
 							clerkContext.clerk.mountUserButton(element);
 						}}
@@ -1281,7 +1412,7 @@
 				<div class="mx-auto flex max-w-[1440px] justify-center sm:mx-0 sm:justify-start">
 					<div class="pointer-events-auto w-full max-w-[520px]">
 						<div
-							class="overflow-hidden rounded-[28px] border border-[var(--border)] bg-white/95 text-[var(--text)] shadow-[var(--shadow-float)] backdrop-blur-2xl"
+							class="overflow-hidden rounded-[28px] border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] shadow-[var(--shadow-float)]"
 						>
 							<form
 								class="flex items-center gap-3 px-4 py-3"
@@ -1441,11 +1572,11 @@
 							class="flex h-full flex-col justify-between px-3 pt-[calc(env(safe-area-inset-top,0px)+8px)] pb-3 sm:hidden"
 						>
 							<div
-								class="pointer-events-auto rounded-[24px] border border-[var(--border)] bg-white/95 px-3 py-3 text-[var(--text)] shadow-[var(--shadow-panel)] backdrop-blur-2xl"
+								class="pointer-events-auto rounded-[24px] border border-[var(--border)] bg-[var(--surface)] px-3 py-3 text-[var(--text)] shadow-[var(--shadow-panel)]"
 							>
 								<div class="flex items-center gap-3">
 									<div
-										class="flex h-12 w-12 shrink-0 items-center justify-center rounded-[16px] border border-[var(--border)] bg-[var(--surface-muted)] text-[var(--text)]"
+										class="flex h-11 w-11 shrink-0 items-center justify-center rounded-[14px] border border-[var(--border)] bg-[var(--surface-muted)] text-[var(--text)]"
 									>
 										{#if currentCueModifier === 'left' || currentCueModifier === 'slight left' || currentCueModifier === 'sharp left'}
 											<svg
@@ -1519,12 +1650,12 @@
 										<div class="flex items-start justify-between gap-2">
 											<div class="min-w-0">
 												<p
-													class="text-[2.25rem] leading-none font-semibold tracking-[-0.08em] text-[#121212]"
+													class="text-[2rem] leading-none font-semibold tracking-[-0.07em] text-[#121212]"
 												>
 													{navigationRoute ? nextCueDistanceLabel : '--'}
 												</p>
 												<p
-													class="mt-1 truncate text-base font-semibold tracking-[-0.04em] text-[var(--text)]"
+													class="mt-1 truncate text-[15px] font-semibold tracking-[-0.03em] text-[var(--text)]"
 												>
 													{navigationRoadLabel}
 												</p>
@@ -1557,26 +1688,21 @@
 							</div>
 
 							<div
-								class="pointer-events-auto rounded-[26px] border border-[var(--border)] bg-white/95 px-3.5 pt-2.5 pb-[calc(env(safe-area-inset-bottom,0px)+10px)] text-[var(--text)] shadow-[var(--shadow-panel)] backdrop-blur-2xl"
+								class="pointer-events-auto rounded-[24px] border border-[var(--border)] bg-[var(--surface)] px-4 pt-2.5 pb-[calc(env(safe-area-inset-bottom,0px)+10px)] text-[var(--text)] shadow-[var(--shadow-panel)]"
 							>
 								<div class="mx-auto h-1.5 w-12 rounded-full bg-black/10"></div>
 
 								<div class="mt-3 flex items-center justify-between gap-3">
 									<div class="min-w-0">
 										<p
-											class="truncate text-[1.2rem] leading-none font-semibold tracking-[-0.05em] text-[var(--text)]"
+											class="truncate text-[1.05rem] leading-none font-semibold tracking-[-0.04em] text-[var(--text)]"
 										>
 											{currentRouteDestinationLabel}
 										</p>
-										<p class="mt-1 text-sm leading-5 text-[var(--muted)]">{routeDistanceLabel}</p>
+										<p class="mt-1 text-[13px] leading-5 text-[var(--muted)]">
+											{routeDistanceLabel}
+										</p>
 									</div>
-									{#if activeTripSyncMode === 'local'}
-										<span
-											class="shrink-0 rounded-full border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1 text-[10px] font-medium text-[var(--muted)]"
-										>
-											Local only
-										</span>
-									{/if}
 								</div>
 
 								{#if tripError}
@@ -1604,40 +1730,45 @@
 								{/if}
 
 								<div
-									class="mt-3 rounded-[18px] border border-[var(--border)] bg-[var(--surface)] px-3 py-3"
+									class="mt-3 rounded-[18px] border border-[var(--border)] bg-[var(--surface-muted)] px-2.5 py-2.5"
 								>
-									<div class="flex items-start justify-between gap-3">
+									<div class="flex items-center justify-between gap-3">
 										<div class="min-w-0">
 											<p class="text-[10px] tracking-[0.24em] text-[var(--muted)] uppercase">
-												Report ahead
-											</p>
-											<p class="mt-1 text-xs leading-5 text-[var(--muted)]">
-												Send a quick road report from your live location.
+												Report
 											</p>
 										</div>
 										<span
-											class="shrink-0 rounded-full border border-[var(--border)] bg-white px-2 py-1 text-[10px] font-medium text-[var(--muted)]"
+											class="shrink-0 rounded-full border border-[var(--border)] bg-white px-2.5 py-1 text-[10px] font-medium text-[var(--muted)]"
 										>
 											Live GPS
 										</span>
 									</div>
 
-									<div class="mt-3 grid grid-cols-3 gap-2">
+									<div class="mt-2 grid grid-cols-3 gap-1.5">
 										{#each INCIDENT_TYPES as incidentType (incidentType)}
 											<button
 												type="button"
 												onclick={() => void submitIncident(incidentType)}
 												disabled={reportSubmitting}
-												class={`rounded-[16px] border px-2.5 py-2.5 text-center transition ${
+												class={`rounded-[14px] border px-1.5 py-2 text-center transition ${
 													selectedType === incidentType
 														? 'border-[#1e88f7] bg-[#eef6ff] shadow-[0_10px_24px_rgba(30,136,247,0.12)]'
 														: 'border-[var(--border)] bg-white'
 												} disabled:opacity-50`}
 											>
-												<div class="flex flex-col items-center gap-1.5">
-													<IncidentTypeIcon type={incidentType} class="h-6 w-6 shrink-0" />
-													<span class="text-[11px] leading-4 font-semibold text-[var(--text)]">
-														{INCIDENT_LABELS[incidentType].en}
+												<div class="flex flex-col items-center gap-1">
+													<div
+														class={`flex h-8 w-8 items-center justify-center rounded-[10px] ${
+															selectedType === incidentType
+																? 'bg-white'
+																: 'bg-[var(--surface-muted)]'
+														}`}
+													>
+														<IncidentTypeIcon type={incidentType} class="h-4 w-4 shrink-0" />
+													</div>
+													<span class="text-[9px] leading-3 font-semibold text-[var(--text)]">
+														{REPORT_TYPE_LABELS[incidentType]}
 													</span>
 												</div>
 											</button>
@@ -1649,7 +1780,7 @@
 									type="button"
 									onclick={markArrived}
 									disabled={tripStatus !== 'tracking' || tripBusy !== null}
-									class="mt-3 w-full rounded-[22px] bg-[var(--primary)] px-4 py-3.5 text-base font-semibold text-white shadow-[0_14px_30px_rgba(30,136,247,0.22)] hover:brightness-95 disabled:opacity-50"
+									class="mt-3 w-full rounded-[20px] bg-[var(--primary)] px-4 py-3 text-base font-semibold text-white shadow-[0_14px_30px_rgba(30,136,247,0.22)] hover:bg-[var(--primary-strong)] disabled:bg-[var(--surface-muted)] disabled:text-[var(--muted)] disabled:shadow-none"
 								>
 									{tripBusy === 'arriving' ? 'Saving arrival...' : 'Mark arrived'}
 								</button>
@@ -1659,17 +1790,17 @@
 						<div
 							class="hidden h-full flex-col justify-between px-3 pt-[calc(env(safe-area-inset-top,0px)+10px)] pb-[calc(env(safe-area-inset-bottom,0px)+12px)] sm:flex lg:px-5 xl:px-6"
 						>
-							<div class="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+							<div class="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_280px]">
 								<div
-									class="pointer-events-auto flex min-w-0 items-start gap-4 rounded-[32px] border border-[var(--border)] bg-white/95 px-5 py-5 text-[var(--text)] shadow-[var(--shadow-float)] backdrop-blur-2xl"
+									class="pointer-events-auto flex min-w-0 items-start gap-3 rounded-[24px] border border-[var(--border)] bg-[var(--surface)] px-4 py-4 text-[var(--text)] shadow-[var(--shadow-float)]"
 								>
 									<div
-										class="flex h-24 w-24 shrink-0 items-center justify-center rounded-[28px] bg-[var(--surface-muted)] text-[var(--text)]"
+										class="flex h-16 w-16 shrink-0 items-center justify-center rounded-[20px] bg-[var(--surface-muted)] text-[var(--text)]"
 									>
 										{#if currentCueModifier === 'left' || currentCueModifier === 'slight left' || currentCueModifier === 'sharp left'}
 											<svg
 												viewBox="0 0 24 24"
-												class="h-12 w-12"
+												class="h-9 w-9"
 												fill="none"
 												stroke="currentColor"
 												stroke-width="2.4"
@@ -1682,7 +1813,7 @@
 										{:else if currentCueModifier === 'right' || currentCueModifier === 'slight right' || currentCueModifier === 'sharp right'}
 											<svg
 												viewBox="0 0 24 24"
-												class="h-12 w-12"
+												class="h-9 w-9"
 												fill="none"
 												stroke="currentColor"
 												stroke-width="2.4"
@@ -1695,7 +1826,7 @@
 										{:else if currentCueModifier === 'uturn'}
 											<svg
 												viewBox="0 0 24 24"
-												class="h-12 w-12"
+												class="h-9 w-9"
 												fill="none"
 												stroke="currentColor"
 												stroke-width="2.4"
@@ -1708,7 +1839,7 @@
 										{:else if currentCueModifier === 'arrive'}
 											<svg
 												viewBox="0 0 24 24"
-												class="h-12 w-12"
+												class="h-9 w-9"
 												fill="none"
 												stroke="currentColor"
 												stroke-width="2.2"
@@ -1721,7 +1852,7 @@
 										{:else}
 											<svg
 												viewBox="0 0 24 24"
-												class="h-12 w-12"
+												class="h-9 w-9"
 												fill="none"
 												stroke="currentColor"
 												stroke-width="2.4"
@@ -1739,12 +1870,12 @@
 											<div class="min-w-0">
 												<div class="flex flex-wrap items-center gap-3">
 													<p
-														class="text-4xl font-semibold tracking-[-0.06em] text-[var(--text)] sm:text-5xl lg:text-6xl"
+														class="text-3xl font-semibold tracking-[-0.06em] text-[var(--text)] sm:text-4xl lg:text-5xl"
 													>
 														{navigationRoute ? nextCueDistanceLabel : '--'}
 													</p>
 													<span
-														class={`inline-flex items-center rounded-full px-3 py-1.5 text-xs font-semibold sm:text-sm ${
+														class={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold ${
 															navigationRoute
 																? getTrafficBadgeClass(navigationRoute.trafficLevel)
 																: 'bg-[var(--surface-muted)] text-[var(--muted)]'
@@ -1756,28 +1887,26 @@
 													</span>
 												</div>
 												<p
-													class="mt-2 truncate text-[1.6rem] font-semibold tracking-[-0.05em] text-[var(--primary)] sm:text-[2rem]"
+													class="mt-1.5 truncate text-[1.25rem] font-semibold tracking-[-0.05em] text-[var(--primary)] sm:text-[1.5rem]"
 												>
 													{navigationRoadLabel}
 												</p>
 											</div>
 										</div>
 
-										<p
-											class="mt-3 max-w-[52rem] text-base leading-7 text-[var(--muted)] lg:text-lg"
-										>
+										<p class="mt-2 max-w-[40rem] text-sm leading-6 text-[var(--muted)]">
 											{navigationInstruction}
 										</p>
 									</div>
 								</div>
 
-								<div class="pointer-events-auto grid gap-3">
+								<div class="pointer-events-auto grid gap-2.5">
 									<div
-										class="rounded-[26px] border border-[var(--border)] bg-white/95 px-4 py-3.5 text-[var(--text)] shadow-[var(--shadow-panel)] backdrop-blur-2xl"
+										class="rounded-[22px] border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5 text-[var(--text)] shadow-[var(--shadow-panel)]"
 									>
 										<div class="flex items-center gap-3">
 											<div
-												class="flex h-11 w-11 shrink-0 items-center justify-center rounded-[16px] bg-[var(--surface-muted)] text-[var(--primary)]"
+												class="flex h-9 w-9 shrink-0 items-center justify-center rounded-[14px] bg-[var(--surface-muted)] text-[var(--primary)]"
 											>
 												<svg
 													viewBox="0 0 24 24"
@@ -1796,7 +1925,7 @@
 												<p class="text-[10px] tracking-[0.28em] text-[var(--muted)] uppercase">
 													ETA
 												</p>
-												<p class="mt-1 text-2xl font-semibold text-[var(--text)]">
+												<p class="mt-0.5 text-xl font-semibold text-[var(--text)]">
 													{nextArrivalLabel}
 												</p>
 											</div>
@@ -1804,11 +1933,11 @@
 									</div>
 
 									<div
-										class="rounded-[26px] border border-[var(--border)] bg-white/95 px-4 py-3.5 text-[var(--text)] shadow-[var(--shadow-panel)] backdrop-blur-2xl"
+										class="rounded-[22px] border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5 text-[var(--text)] shadow-[var(--shadow-panel)]"
 									>
 										<div class="flex items-center gap-3">
 											<div
-												class="flex h-11 w-11 shrink-0 items-center justify-center rounded-[16px] bg-[var(--surface-muted)] text-[var(--primary)]"
+												class="flex h-9 w-9 shrink-0 items-center justify-center rounded-[14px] bg-[var(--surface-muted)] text-[var(--primary)]"
 											>
 												<svg
 													viewBox="0 0 24 24"
@@ -1829,7 +1958,7 @@
 												<p class="text-[10px] tracking-[0.28em] text-[var(--muted)] uppercase">
 													Trip
 												</p>
-												<p class="mt-1 text-2xl font-semibold text-[var(--text)]">
+												<p class="mt-0.5 text-xl font-semibold text-[var(--text)]">
 													{navigationRoute ? formatMinutes(navigationRoute.durationSec) : '--'}
 												</p>
 											</div>
@@ -1837,11 +1966,11 @@
 									</div>
 
 									<div
-										class="rounded-[26px] border border-[var(--border)] bg-white/95 px-4 py-3.5 text-[var(--text)] shadow-[var(--shadow-panel)] backdrop-blur-2xl"
+										class="rounded-[22px] border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5 text-[var(--text)] shadow-[var(--shadow-panel)]"
 									>
 										<div class="flex items-start gap-3">
 											<div
-												class="flex h-11 w-11 shrink-0 items-center justify-center rounded-[16px] bg-[var(--surface-muted)] text-[var(--primary)]"
+												class="flex h-9 w-9 shrink-0 items-center justify-center rounded-[14px] bg-[var(--surface-muted)] text-[var(--primary)]"
 											>
 												<svg
 													viewBox="0 0 24 24"
@@ -1874,7 +2003,7 @@
 															: 'Live'}
 													</span>
 												</div>
-												<p class="mt-1 text-base font-semibold text-[var(--text)]">
+												<p class="mt-0.5 text-sm font-semibold text-[var(--text)]">
 													{navigationRoute?.trafficSummary ?? 'Live route'}
 												</p>
 											</div>
@@ -1886,15 +2015,15 @@
 							<div class="pointer-events-none flex-1"></div>
 
 							<div
-								class="grid items-end gap-4 lg:grid-cols-[minmax(0,480px)_minmax(300px,380px)] lg:justify-between"
+								class="grid items-end gap-3 lg:grid-cols-[minmax(0,380px)_minmax(260px,340px)] lg:justify-between"
 							>
 								<div class="pointer-events-auto space-y-3">
 									<div
-										class="rounded-[28px] border border-[var(--border)] bg-white/95 px-5 py-4 text-[var(--text)] shadow-[var(--shadow-float)] backdrop-blur-2xl"
+										class="rounded-[22px] border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-[var(--text)] shadow-[var(--shadow-float)]"
 									>
 										<div class="flex items-start gap-3">
 											<div
-												class="mt-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-[16px] bg-[var(--surface-muted)] text-[var(--primary)]"
+												class="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-[14px] bg-[var(--surface-muted)] text-[var(--primary)]"
 											>
 												<svg
 													viewBox="0 0 24 24"
@@ -1916,12 +2045,12 @@
 													Live trip
 												</p>
 												<p
-													class="mt-1 text-2xl font-semibold tracking-[-0.04em] text-[var(--text)]"
+													class="mt-1 text-[1.45rem] font-semibold tracking-[-0.04em] text-[var(--text)]"
 												>
 													{activeRouteLabel}
 												</p>
 												<div
-													class="mt-3 flex flex-wrap items-center gap-3 text-sm text-[var(--muted)]"
+													class="mt-2 flex flex-wrap items-center gap-2.5 text-xs text-[var(--muted)]"
 												>
 													<span class="inline-flex items-center gap-1.5">
 														<svg
@@ -1955,24 +2084,6 @@
 															? formatDistance(navigationRoute.distanceMeters)
 															: '--'}
 													</span>
-													{#if activeTripSyncMode === 'local'}
-														<span class="inline-flex items-center gap-1.5">
-															<svg
-																viewBox="0 0 24 24"
-																class="h-4 w-4"
-																fill="none"
-																stroke="currentColor"
-																stroke-width="2"
-																stroke-linecap="round"
-																stroke-linejoin="round"
-															>
-																<path d="M4 7h16" />
-																<path d="M7 12h10" />
-																<path d="M10 17h4" />
-															</svg>
-															Local only
-														</span>
-													{/if}
 												</div>
 											</div>
 										</div>
@@ -2000,37 +2111,15 @@
 											</div>
 										</div>
 									{/if}
-									{#if tripMessage}
-										<div
-											class="rounded-[20px] border border-[var(--accent-soft)] bg-[var(--accent-soft)] px-4 py-3 text-sm text-[var(--accent)]"
-										>
-											<div class="flex items-start gap-2.5">
-												<svg
-													viewBox="0 0 24 24"
-													class="mt-0.5 h-4 w-4 shrink-0"
-													fill="none"
-													stroke="currentColor"
-													stroke-width="2.2"
-													stroke-linecap="round"
-													stroke-linejoin="round"
-												>
-													<path d="M4 12h16" />
-													<path d="m13 5 7 7-7 7" />
-												</svg>
-												<span>{tripMessage}</span>
-											</div>
-										</div>
-									{/if}
-
 									<div
-										class="rounded-[24px] border border-[var(--border)] bg-white/95 px-4 py-4 text-[var(--text)] shadow-[var(--shadow-panel)] backdrop-blur-2xl"
+										class="rounded-[20px] border border-[var(--border)] bg-[var(--surface)] px-3.5 py-3 text-[var(--text)] shadow-[var(--shadow-panel)]"
 									>
 										<div class="flex items-start justify-between gap-3">
 											<div class="min-w-0">
 												<p class="text-[10px] tracking-[0.28em] text-[var(--muted)] uppercase">
 													Report ahead
 												</p>
-												<p class="mt-1 text-sm font-medium text-[var(--text)]">
+												<p class="mt-1 text-xs font-medium text-[var(--text)]">
 													Flag a blockage or other issue without leaving navigation.
 												</p>
 											</div>
@@ -2057,21 +2146,21 @@
 											</div>
 										{/if}
 
-										<div class="mt-3 grid grid-cols-3 gap-2">
+										<div class="mt-2.5 grid grid-cols-3 gap-1.5">
 											{#each INCIDENT_TYPES as incidentType (incidentType)}
 												<button
 													type="button"
 													onclick={() => void submitIncident(incidentType)}
 													disabled={reportSubmitting}
-													class={`rounded-[18px] border px-3 py-3 text-left transition ${
+													class={`rounded-[14px] border px-2 py-2 text-left transition ${
 														selectedType === incidentType
 															? 'border-[#1e88f7] bg-[#eef6ff] shadow-[0_10px_24px_rgba(30,136,247,0.12)]'
 															: 'border-[var(--border)] bg-white hover:bg-[var(--primary-soft)]'
 													} disabled:opacity-50`}
 												>
-													<div class="flex items-center gap-2">
-														<IncidentTypeIcon type={incidentType} class="h-6 w-6 shrink-0" />
-														<span class="min-w-0 text-xs font-semibold text-[var(--text)]">
+													<div class="flex items-center gap-1.5">
+														<IncidentTypeIcon type={incidentType} class="h-4.5 w-4.5 shrink-0" />
+														<span class="min-w-0 text-[11px] font-semibold text-[var(--text)]">
 															{INCIDENT_LABELS[incidentType].en}
 														</span>
 													</div>
@@ -2086,7 +2175,7 @@
 								>
 									<div class="flex flex-wrap justify-end gap-2">
 										<span
-											class="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-[rgba(255,253,248,0.96)] px-3.5 py-2 text-xs font-medium text-[var(--muted)] shadow-[0_12px_28px_rgba(36,31,23,0.1)] backdrop-blur-xl"
+											class="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2 text-xs font-medium text-[var(--muted)] shadow-[0_12px_28px_rgba(36,31,23,0.1)]"
 										>
 											<svg
 												viewBox="0 0 24 24"
@@ -2103,7 +2192,7 @@
 											{currentRouteDestinationLabel}
 										</span>
 										<span
-											class="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-[rgba(255,253,248,0.96)] px-3.5 py-2 text-xs font-medium text-[var(--muted)] shadow-[0_12px_28px_rgba(36,31,23,0.1)] backdrop-blur-xl"
+											class="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2 text-xs font-medium text-[var(--muted)] shadow-[0_12px_28px_rgba(36,31,23,0.1)]"
 										>
 											<svg
 												viewBox="0 0 24 24"
@@ -2125,7 +2214,7 @@
 										type="button"
 										onclick={markArrived}
 										disabled={tripStatus !== 'tracking' || tripBusy !== null}
-										class="flex min-w-[240px] items-center justify-center gap-3 self-end rounded-[26px] bg-[var(--primary)] px-6 py-5 text-lg font-semibold text-white shadow-[0_24px_64px_rgba(90,66,41,0.24)] backdrop-blur-2xl hover:bg-[#5a4229] disabled:opacity-50"
+										class="flex min-w-[240px] items-center justify-center gap-3 self-end rounded-[26px] bg-[var(--primary)] px-6 py-5 text-lg font-semibold text-white shadow-[0_24px_64px_rgba(90,66,41,0.24)] hover:bg-[#5a4229] disabled:bg-[var(--surface-muted)] disabled:text-[var(--muted)] disabled:shadow-none"
 									>
 										<svg
 											viewBox="0 0 24 24"
@@ -2148,23 +2237,35 @@
 							class="flex h-full flex-col justify-between px-3 pt-[calc(env(safe-area-inset-top,0px)+12px)] pb-3 sm:hidden"
 						>
 							<div
-								class="pointer-events-auto relative w-full max-w-[320px] rounded-[24px] border border-black/8 bg-[rgba(248,248,246,0.96)] px-4 py-3 text-[#141414] shadow-[0_16px_40px_rgba(0,0,0,0.18)] backdrop-blur-2xl"
+								class="pointer-events-auto relative w-full max-w-[348px] overflow-hidden rounded-[30px] border border-[var(--border)] bg-[var(--surface)] px-4 py-4 text-[var(--text)] shadow-[var(--shadow-panel)]"
 							>
-								<div class="absolute top-3 right-4 flex items-center gap-2">
+								<div class="absolute top-4 right-4 flex items-center gap-2">
 									<span
-										class={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold ${
+										class={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] font-semibold shadow-[0_10px_24px_rgba(15,23,42,0.08)] ${
 											navigationRoute
 												? getTrafficBadgeClass(navigationRoute.trafficLevel)
-												: 'bg-black/8 text-black/60'
+												: 'border border-[var(--border)] bg-[var(--surface-muted)] text-[var(--muted)]'
 										}`}
 									>
+										<svg
+											viewBox="0 0 24 24"
+											class="h-3.5 w-3.5"
+											fill="none"
+											stroke="currentColor"
+											stroke-width="2"
+											stroke-linecap="round"
+											stroke-linejoin="round"
+										>
+											<path d="M4 12h16" />
+											<path d="m13 5 7 7-7 7" />
+										</svg>
 										{navigationRoute ? getTrafficLabel(navigationRoute.trafficLevel) : 'Standby'}
 									</span>
 
 									<button
 										type="button"
 										onclick={clearRoutePlan}
-										class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface)] text-[var(--muted)] shadow-[0_10px_24px_rgba(36,31,23,0.08)]"
+										class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface)] text-[var(--muted)] shadow-[0_12px_28px_rgba(15,23,42,0.08)]"
 										aria-label="Dismiss route planner"
 									>
 										<svg
@@ -2182,34 +2283,63 @@
 									</button>
 								</div>
 
-								<p class="pr-[8.5rem] text-[1.05rem] leading-7 font-medium text-black/68">
+								<p
+									class="text-[11px] font-semibold tracking-[0.28em] text-[var(--muted)] uppercase"
+								>
+									Next move
+								</p>
+								<p
+									class="mt-3 pr-[9.25rem] text-[1.65rem] leading-[1.2] font-semibold tracking-[-0.05em] text-[#101828]"
+								>
 									{navigationRoute?.navigationCue.instruction ??
 										'Search for a destination to compare route options.'}
 								</p>
+								<p class="mt-2 pr-[5rem] text-sm font-medium text-[var(--muted)]">
+									{navigationRoadLabel}
+								</p>
 
-								<div class="mt-2.5 flex flex-wrap gap-2">
-									<span
-										class="rounded-full border border-black/8 bg-[#f5f5f2] px-3 py-1.5 text-[12px] font-medium text-black/64"
+								<div class="mt-4 grid grid-cols-3 gap-2">
+									<div
+										class="rounded-[20px] border border-[var(--border)] bg-[var(--surface-muted)] px-3 py-2.5 shadow-[0_10px_24px_rgba(15,23,42,0.05)]"
 									>
-										{routeDistanceLabel}
-									</span>
-									<span
-										class="rounded-full border border-black/8 bg-[#f5f5f2] px-3 py-1.5 text-[12px] font-medium text-black/64"
-									>
-										Arrive {nextArrivalLabel}
-									</span>
-									{#if selectedRoute}
-										<span
-											class="rounded-full border border-black/8 bg-[#f5f5f2] px-3 py-1.5 text-[12px] font-medium text-black/64"
+										<p
+											class="text-[10px] font-semibold tracking-[0.22em] text-[var(--muted)] uppercase"
 										>
-											{formatMinutes(selectedRoute.durationSec)}
-										</span>
-									{/if}
+											Distance
+										</p>
+										<p class="mt-1 text-base font-semibold text-[var(--text)]">
+											{routeDistanceLabel}
+										</p>
+									</div>
+									<div
+										class="rounded-[20px] border border-[var(--border)] bg-[var(--surface-muted)] px-3 py-2.5 shadow-[0_10px_24px_rgba(15,23,42,0.05)]"
+									>
+										<p
+											class="text-[10px] font-semibold tracking-[0.22em] text-[var(--muted)] uppercase"
+										>
+											ETA
+										</p>
+										<p class="mt-1 text-base font-semibold text-[var(--text)]">
+											{nextArrivalLabel}
+										</p>
+									</div>
+									<div
+										class="rounded-[20px] border border-[var(--border)] bg-[var(--surface-muted)] px-3 py-2.5 shadow-[0_10px_24px_rgba(15,23,42,0.05)]"
+									>
+										<p
+											class="text-[10px] font-semibold tracking-[0.22em] text-[var(--muted)] uppercase"
+										>
+											Trip
+										</p>
+										<p class="mt-1 text-base font-semibold text-[var(--text)]">
+											{selectedRoute ? formatMinutes(selectedRoute.durationSec) : '--'}
+										</p>
+									</div>
 								</div>
 
 								{#if mobileRouteBanner}
 									<div
-										class={`mt-3 line-clamp-2 rounded-[16px] border px-3 py-2 text-[12px] leading-5 ${getMobileRouteBannerClass(mobileRouteBanner.tone)}`}
+										class={`mt-3 line-clamp-2 rounded-[18px] border px-3.5 py-2.5 text-[12px] leading-5 shadow-[0_10px_24px_rgba(15,23,42,0.04)] ${getMobileRouteBannerClass(mobileRouteBanner.tone)}`}
 									>
 										{mobileRouteBanner.message}
 									</div>
@@ -2217,16 +2347,50 @@
 							</div>
 
 							<div
-								class="pointer-events-auto rounded-[28px] border border-black/8 bg-[rgba(248,248,246,0.98)] px-4 pt-3 pb-[calc(env(safe-area-inset-bottom,0px)+12px)] text-[#141414] shadow-[0_-18px_48px_rgba(0,0,0,0.2)] backdrop-blur-2xl"
+								class="pointer-events-auto rounded-[34px] border border-[var(--border)] bg-[var(--surface)] px-4 pt-3 pb-[calc(env(safe-area-inset-bottom,0px)+14px)] text-[var(--text)] shadow-[0_-20px_56px_rgba(15,23,42,0.18)]"
 							>
-								<div class="mx-auto h-1.5 w-12 rounded-full bg-black/10"></div>
+								<div
+									class="mx-auto h-1.5 w-14 rounded-full bg-[linear-gradient(90deg,rgba(156,163,175,0.18),rgba(100,116,139,0.4),rgba(156,163,175,0.18))]"
+								></div>
 
 								<div class="mt-3">
-									<div class="mb-3 flex flex-wrap gap-1.5">
+									<div class="mb-4 flex items-center justify-between gap-3">
+										<div>
+											<p
+												class="text-[11px] font-semibold tracking-[0.26em] text-[var(--muted)] uppercase"
+											>
+												Route setup
+											</p>
+											<p class="mt-1 text-lg font-semibold tracking-[-0.04em] text-[#101828]">
+												Compare options
+											</p>
+										</div>
+										{#if selectedRoute}
+											<span
+												class="inline-flex items-center gap-1.5 rounded-full border border-[#b6dcff] bg-[#edf6ff] px-3 py-1.5 text-[11px] font-semibold text-[var(--primary-strong)]"
+											>
+												<svg
+													viewBox="0 0 24 24"
+													class="h-3.5 w-3.5"
+													fill="none"
+													stroke="currentColor"
+													stroke-width="2.2"
+													stroke-linecap="round"
+													stroke-linejoin="round"
+												>
+													<path d="m5 12 4 4L19 6" />
+												</svg>
+												Selected
+											</span>
+										{/if}
+									</div>
+
+									<div class="mb-4 flex flex-wrap gap-2">
 										{#each preferenceSummary.slice(0, 3) as chip (chip)}
 											<span
-												class="rounded-full border border-black/8 bg-[#f5f5f2] px-2.5 py-1 text-[11px] font-medium text-black/60"
+												class="inline-flex items-center gap-1.5 rounded-full border border-[var(--border)] bg-white px-3 py-1.5 text-[11px] font-semibold text-[var(--muted)] shadow-[0_8px_18px_rgba(15,23,42,0.04)]"
 											>
+												<span class="h-1.5 w-1.5 rounded-full bg-[var(--primary)]"></span>
 												{chip}
 											</span>
 										{/each}
@@ -2234,9 +2398,11 @@
 									{#if routeLoading}
 										<div class="grid grid-cols-3 gap-2">
 											{#each [0, 1, 2] as loadingCard (loadingCard)}
-												<div class="rounded-[18px] bg-[#f3f4f6] px-3 py-3">
+												<div
+													class="rounded-[22px] border border-[var(--border)] bg-[var(--surface)] px-3 py-3 shadow-[0_10px_22px_rgba(15,23,42,0.04)]"
+												>
 													<div class="h-3 w-16 rounded-full bg-black/8"></div>
-													<div class="mt-3 h-5 w-10 rounded-full bg-black/8"></div>
+													<div class="mt-3 h-6 w-12 rounded-full bg-black/8"></div>
 													<div class="mt-2 h-3 w-12 rounded-full bg-black/8"></div>
 												</div>
 											{/each}
@@ -2249,31 +2415,55 @@
 												<button
 													type="button"
 													onclick={() => selectRoute(route.routeId)}
-													class={`rounded-[20px] border px-3 py-3 text-left transition ${
+													class={`rounded-[24px] border px-3.5 py-3.5 text-left transition ${
 														selectedRouteId === route.routeId
-															? 'border-[var(--border-strong)] bg-[var(--primary-soft)] shadow-[0_10px_24px_rgba(90,66,41,0.1)]'
-															: 'border-black/8 bg-[#f8f8f6]'
+															? 'border-[#b6dcff] bg-[linear-gradient(180deg,#f3f8ff,#eaf4ff)] shadow-[0_16px_36px_rgba(25,118,243,0.14)]'
+															: 'border-[var(--border)] bg-[var(--surface)] shadow-[0_10px_24px_rgba(15,23,42,0.04)]'
 													}`}
 												>
-													<p
-														class="line-clamp-2 text-[13px] leading-4 font-semibold text-[#171717]"
-													>
-														{route.label}
-													</p>
-													<p class="mt-2 text-[15px] leading-none font-semibold text-[#171717]">
-														{formatMinutes(route.durationSec)}
-													</p>
-													<div class="mt-2 flex items-end justify-between gap-2">
-														<p class="text-[11px] text-black/46">
-															{formatDistance(route.distanceMeters)}
-														</p>
+													<div class="flex items-start justify-between gap-2">
+														<div class="min-w-0">
+															<p
+																class="line-clamp-2 text-[13px] leading-4 font-semibold text-[#171717]"
+															>
+																{route.label}
+															</p>
+															<p
+																class="mt-2 text-[22px] leading-none font-semibold tracking-[-0.05em] text-[#101828]"
+															>
+																{formatMinutes(route.durationSec)}
+															</p>
+														</div>
 														<span
-															class={`rounded-full px-2 py-1 text-[10px] font-semibold ${getTrafficBadgeClass(route.trafficLevel)}`}
+															class={`rounded-full px-2.5 py-1 text-[10px] font-semibold ${getTrafficBadgeClass(route.trafficLevel)}`}
 														>
 															{getTrafficLabel(route.trafficLevel)}
 														</span>
 													</div>
-													<p class="mt-2 text-[10px] text-black/44">
+													<div
+														class="mt-3 flex items-center justify-between gap-2 text-[11px] font-medium text-[var(--muted)]"
+													>
+														<p>{formatDistance(route.distanceMeters)}</p>
+														{#if selectedRouteId === route.routeId}
+															<span
+																class="inline-flex items-center gap-1 text-[var(--primary-strong)]"
+															>
+																<svg
+																	viewBox="0 0 24 24"
+																	class="h-3.5 w-3.5"
+																	fill="none"
+																	stroke="currentColor"
+																	stroke-width="2.2"
+																	stroke-linecap="round"
+																	stroke-linejoin="round"
+																>
+																	<path d="m5 12 4 4L19 6" />
+																</svg>
+																Best fit
+															</span>
+														{/if}
+													</div>
+													<p class="mt-2 text-[10px] leading-4 text-black/48">
 														{formatTollEstimate(route.estimatedTollCostUsd)} • {formatFuelEstimate(
 															route.estimatedFuelLiters
 														)}
@@ -2283,35 +2473,70 @@
 										</div>
 									{:else}
 										<div
-											class="rounded-[18px] border border-dashed border-black/10 bg-[#f8f8f6] px-3.5 py-3 text-[13px] leading-5 text-black/56"
+											class="rounded-[22px] border border-dashed border-[var(--border)] bg-[var(--surface)] px-4 py-3.5 text-[13px] leading-5 text-[var(--muted)]"
 										>
 											Refresh to load routes again.
 										</div>
 									{/if}
 								</div>
 
-								<div class="mt-3 grid grid-cols-[72px_92px_minmax(0,1fr)] gap-2">
+								<div class="mt-4 grid grid-cols-[84px_108px_minmax(0,1fr)] gap-2">
 									<button
 										type="button"
 										onclick={clearRoutePlan}
-										class="rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5 text-sm font-semibold text-[var(--muted)]"
+										class="inline-flex items-center justify-center gap-2 rounded-[20px] border border-[var(--border)] bg-white px-3 py-3 text-sm font-semibold text-[var(--muted)] shadow-[0_10px_22px_rgba(15,23,42,0.04)]"
 									>
+										<svg
+											viewBox="0 0 24 24"
+											class="h-4 w-4"
+											fill="none"
+											stroke="currentColor"
+											stroke-width="2.2"
+											stroke-linecap="round"
+											stroke-linejoin="round"
+										>
+											<path d="M5 12h14" />
+										</svg>
 										Later
 									</button>
 									<button
 										type="button"
 										onclick={() => void planRoute()}
 										disabled={!routeDestination || routeLoading}
-										class="rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5 text-sm font-semibold text-[var(--muted)] disabled:opacity-50"
+										class="inline-flex items-center justify-center gap-2 rounded-[20px] border border-[var(--border)] bg-white px-3 py-3 text-sm font-semibold text-[var(--muted)] shadow-[0_10px_22px_rgba(15,23,42,0.04)] disabled:opacity-50"
 									>
+										<svg
+											viewBox="0 0 24 24"
+											class="h-4 w-4"
+											fill="none"
+											stroke="currentColor"
+											stroke-width="2.2"
+											stroke-linecap="round"
+											stroke-linejoin="round"
+										>
+											<path d="M21 12a9 9 0 1 1-2.64-6.36" />
+											<path d="M21 3v6h-6" />
+										</svg>
 										Refresh
 									</button>
 									<button
 										type="button"
 										onclick={beginTrip}
 										disabled={!selectedRoute || tripBusy !== null}
-										class="rounded-full bg-[var(--primary)] px-4 py-2.5 text-sm font-semibold text-white hover:brightness-95 disabled:opacity-50"
+										class="inline-flex items-center justify-center gap-2 rounded-[22px] bg-[var(--primary)] px-4 py-3 text-sm font-semibold text-white shadow-[0_18px_34px_rgba(25,118,243,0.28)] hover:bg-[var(--primary-strong)] disabled:bg-[var(--surface-muted)] disabled:text-[var(--muted)] disabled:shadow-none"
 									>
+										<svg
+											viewBox="0 0 24 24"
+											class="h-4 w-4"
+											fill="none"
+											stroke="currentColor"
+											stroke-width="2.2"
+											stroke-linecap="round"
+											stroke-linejoin="round"
+										>
+											<path d="M5 12h14" />
+											<path d="m13 5 7 7-7 7" />
+										</svg>
 										{tripBusy === 'starting' ? 'Starting...' : 'Go'}
 									</button>
 								</div>
@@ -2320,7 +2545,7 @@
 
 						<div class="hidden">
 							<div
-								class="pointer-events-auto self-start rounded-[22px] border border-[var(--border)] bg-white/95 p-3 text-[var(--text)] shadow-[var(--shadow-panel)] backdrop-blur-2xl"
+								class="pointer-events-auto self-start rounded-[22px] border border-[var(--border)] bg-[var(--surface)] p-3 text-[var(--text)] shadow-[var(--shadow-panel)]"
 							>
 								<div class="flex items-start justify-between gap-2">
 									<div class="min-w-0">
@@ -2396,7 +2621,7 @@
 
 							<div class="pointer-events-auto lg:self-start lg:justify-self-center">
 								<div
-									class="mx-auto w-full max-w-[560px] rounded-[24px] border border-[var(--border)] bg-white/95 px-3.5 py-3 text-[var(--text)] shadow-[var(--shadow-float)] backdrop-blur-2xl"
+									class="mx-auto w-full max-w-[560px] rounded-[24px] border border-[var(--border)] bg-[var(--surface)] px-3.5 py-3 text-[var(--text)] shadow-[var(--shadow-float)]"
 								>
 									<div class="flex items-start gap-3">
 										<div
@@ -2503,7 +2728,7 @@
 							</div>
 
 							<div
-								class="pointer-events-auto hidden max-h-[calc(100svh-220px)] overflow-hidden rounded-[22px] border border-[var(--border)] bg-white/95 text-[var(--text)] shadow-[var(--shadow-float)] backdrop-blur-2xl lg:block"
+								class="pointer-events-auto hidden max-h-[calc(100svh-220px)] overflow-hidden rounded-[22px] border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] shadow-[var(--shadow-float)] lg:block"
 							>
 								<div
 									class="flex items-center justify-between border-b border-[var(--border)] px-3 py-2"
@@ -2645,13 +2870,6 @@
 										{routeError}
 									</div>
 								{/if}
-								{#if routeMessage}
-									<div
-										class="rounded-[20px] border border-[var(--border)] bg-[var(--primary-soft)] px-4 py-3 text-sm text-[var(--text)]"
-									>
-										{routeMessage}
-									</div>
-								{/if}
 								{#if tripError}
 									<div
 										class="rounded-[20px] border border-[var(--danger)] bg-[var(--danger-soft)] px-4 py-3 text-sm text-[var(--danger)]"
@@ -2670,12 +2888,12 @@
 
 							<div class="pointer-events-auto lg:justify-self-center">
 								<div
-									class="mx-auto flex w-full max-w-[380px] items-center gap-2 rounded-full border border-[var(--border)] bg-white/95 p-2 text-[var(--text)] shadow-[var(--shadow-panel)] backdrop-blur-2xl"
+									class="mx-auto flex w-full max-w-[196px] items-center gap-2 rounded-[26px] border border-white/70 bg-[var(--surface-glass)] p-2.5 text-[var(--text)] shadow-[var(--shadow-panel)]"
 								>
 									<button
 										type="button"
 										onclick={clearRoutePlan}
-										class="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface)] text-[var(--muted)] hover:border-[var(--border-strong)] hover:bg-[var(--primary-soft)]"
+										class="flex h-11 w-11 shrink-0 items-center justify-center rounded-[18px] border border-[var(--border)] bg-white text-[var(--muted)] hover:border-[var(--border-strong)] hover:bg-[var(--primary-soft)]"
 										aria-label="Close route planner"
 										title="Close route planner"
 									>
@@ -2696,7 +2914,7 @@
 										type="button"
 										onclick={() => void planRoute()}
 										disabled={!routeDestination || routeLoading}
-										class="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface)] text-[var(--muted)] hover:border-[var(--border-strong)] hover:bg-[var(--primary-soft)] disabled:opacity-50"
+										class="flex h-11 w-11 shrink-0 items-center justify-center rounded-[18px] border border-[var(--border)] bg-white text-[var(--muted)] hover:border-[var(--border-strong)] hover:bg-[var(--primary-soft)] disabled:opacity-50"
 										aria-label="Refresh routes"
 										title="Refresh routes"
 									>
@@ -2712,14 +2930,6 @@
 											<path d="M21 12a9 9 0 1 1-2.64-6.36" />
 											<path d="M21 3v6h-6" />
 										</svg>
-									</button>
-									<button
-										type="button"
-										onclick={beginTrip}
-										disabled={!selectedRoute || tripBusy !== null}
-										class="flex-1 rounded-full bg-[var(--primary)] px-4 py-2.5 text-sm font-semibold text-white hover:brightness-95 disabled:opacity-50"
-									>
-										{tripBusy === 'starting' ? 'Starting...' : 'Start trip'}
 									</button>
 								</div>
 							</div>
@@ -2742,19 +2952,58 @@
 				class="mx-auto flex max-w-[1440px] flex-col items-center gap-3 sm:mx-0 sm:max-w-none lg:items-start"
 			>
 				<div
-					class="pointer-events-auto rounded-full border border-[var(--border)] bg-white/95 p-1 shadow-[var(--shadow-float)] backdrop-blur-2xl"
+					class="pointer-events-auto w-full max-w-[560px] rounded-[28px] border border-black/8 bg-[var(--surface)] p-1.5 shadow-[var(--shadow-float)]"
 				>
-					<div class="flex items-center gap-1">
+					<div class="grid grid-cols-3 gap-1">
 						{#each dockItems as item (item.id)}
 							<a
 								href={resolve(item.href)}
 								aria-current={activeTab === item.id ? 'page' : undefined}
-								class={`rounded-full px-4 py-2.5 text-sm font-medium ${
+								class={`flex items-center justify-center gap-2 rounded-[22px] px-4 py-3 text-sm font-medium ${
 									activeTab === item.id
-										? 'bg-[var(--surface-muted)] text-[var(--text)]'
-										: 'text-[var(--muted)] hover:bg-[var(--primary-soft)]'
+										? 'bg-[#f3f4f6] text-[var(--text)]'
+										: 'text-[var(--muted)] hover:bg-[#f8fafc]'
 								}`}
 							>
+								{#if item.id === 'pulse'}
+									<svg
+										viewBox="0 0 24 24"
+										class="h-4 w-4"
+										fill="none"
+										stroke="currentColor"
+										stroke-width="2"
+										stroke-linecap="round"
+										stroke-linejoin="round"
+									>
+										<path d="M12 21s6-4.35 6-10a6 6 0 1 0-12 0c0 5.65 6 10 6 10Z" />
+										<circle cx="12" cy="11" r="2.5" />
+									</svg>
+								{:else if item.id === 'route'}
+									<svg
+										viewBox="0 0 24 24"
+										class="h-4 w-4"
+										fill="none"
+										stroke="currentColor"
+										stroke-width="2"
+										stroke-linecap="round"
+										stroke-linejoin="round"
+									>
+										<path d="M9 6 15 12 9 18" />
+									</svg>
+								{:else}
+									<svg
+										viewBox="0 0 24 24"
+										class="h-4 w-4"
+										fill="none"
+										stroke="currentColor"
+										stroke-width="2"
+										stroke-linecap="round"
+										stroke-linejoin="round"
+									>
+										<circle cx="12" cy="8" r="3.5" />
+										<path d="M5 19a7 7 0 0 1 14 0" />
+									</svg>
+								{/if}
 								{item.label}
 							</a>
 						{/each}
@@ -2762,32 +3011,32 @@
 				</div>
 
 				{#if activeTab === 'route'}
-					<div class="w-full max-w-[420px]">
+					<div class="pointer-events-auto w-full max-w-[420px]">
 						{#if routeSheetOpen || tripStatus === 'tracking'}
 							<div
-								class="overflow-hidden rounded-[32px] border border-[var(--border)] bg-white/95 text-[var(--text)] shadow-[var(--shadow-float)] backdrop-blur-2xl"
+								class="overflow-hidden rounded-[34px] border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] shadow-[var(--shadow-float)]"
 							>
-								<div class="border-b border-[var(--border)] bg-white/95 p-4">
+								<div class="border-b border-[var(--border)] bg-[var(--surface)] p-5">
 									<div class="flex items-start justify-between gap-3">
 										<div class="min-w-0">
-											<p class="text-[10px] tracking-[0.28em] text-[var(--muted)] uppercase">
+											<p class="text-[11px] tracking-[0.26em] text-[var(--muted)] uppercase">
 												Plan and track
 											</p>
 											<p
-												class="mt-2 truncate text-2xl font-semibold tracking-[-0.04em] text-[#141414]"
+												class="mt-2 truncate text-[1.85rem] font-semibold tracking-[-0.05em] text-[#101828]"
 											>
 												{currentRouteDestinationLabel}
 											</p>
-											<p class="mt-1 text-sm text-[var(--muted)]">
+											<p class="mt-1 text-sm leading-6 text-[var(--muted)]">
 												{currentRouteDestinationDetail}
 											</p>
 										</div>
 										<div class="flex shrink-0 items-center gap-2">
 											<span
-												class={`rounded-full px-3 py-1 text-xs font-semibold ${
+												class={`rounded-full px-3 py-1.5 text-xs font-semibold shadow-[0_10px_22px_rgba(15,23,42,0.05)] ${
 													navigationRoute
 														? getTrafficBadgeClass(navigationRoute.trafficLevel)
-														: 'bg-[var(--surface-muted)] text-[var(--muted)]'
+														: 'border border-[var(--border)] bg-[var(--surface-muted)] text-[var(--muted)]'
 												}`}
 											>
 												{navigationRoute
@@ -2798,7 +3047,7 @@
 												<button
 													type="button"
 													onclick={() => (routeSheetOpen = false)}
-													class="rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-1 text-xs font-medium text-[var(--muted)] hover:bg-[var(--primary-soft)]"
+													class="rounded-full border border-[var(--border)] bg-white px-3 py-1.5 text-xs font-medium text-[var(--muted)] hover:bg-[var(--primary-soft)]"
 												>
 													Hide
 												</button>
@@ -2806,32 +3055,52 @@
 										</div>
 									</div>
 
-									<div class="mt-4 flex flex-wrap items-center gap-2 text-sm text-[var(--muted)]">
-										<span class="rounded-full bg-[var(--surface)] px-3 py-1.5">
+									<div
+										class="mt-5 grid grid-cols-2 gap-2 text-sm text-[var(--muted)] sm:grid-cols-3"
+									>
+										<span
+											class="rounded-[18px] border border-[var(--border)] bg-white px-3 py-2.5 shadow-[0_8px_18px_rgba(15,23,42,0.04)]"
+										>
 											{navigationRoute
 												? formatMinutes(navigationRoute.durationSec)
 												: routeDistanceLabel}
 										</span>
-										<span class="rounded-full bg-[var(--surface)] px-3 py-1.5">
+										<span
+											class="rounded-[18px] border border-[var(--border)] bg-white px-3 py-2.5 shadow-[0_8px_18px_rgba(15,23,42,0.04)]"
+										>
 											Arrive {nextArrivalLabel}
 										</span>
 										{#if navigationRoute}
-											<span class="rounded-full bg-[var(--surface)] px-3 py-1.5">
+											<span
+												class="rounded-[18px] border border-[var(--border)] bg-white px-3 py-2.5 shadow-[0_8px_18px_rgba(15,23,42,0.04)]"
+											>
 												{formatDistance(navigationRoute.distanceMeters)}
 											</span>
 										{/if}
 									</div>
 								</div>
 
-								<div class="space-y-3 p-4">
+								<div class="space-y-4 p-5">
 									{#if routeDestination && tripStatus !== 'tracking'}
 										<div class="flex justify-end">
 											<button
 												type="button"
 												onclick={() => void planRoute()}
 												disabled={!routeDestination || routeLoading}
-												class="rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-xs font-medium text-[var(--muted)] hover:bg-[var(--primary-soft)] disabled:opacity-50"
+												class="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-white px-3 py-2 text-xs font-medium text-[var(--muted)] hover:bg-[var(--primary-soft)] disabled:opacity-50"
 											>
+												<svg
+													viewBox="0 0 24 24"
+													class="h-3.5 w-3.5"
+													fill="none"
+													stroke="currentColor"
+													stroke-width="2.2"
+													stroke-linecap="round"
+													stroke-linejoin="round"
+												>
+													<path d="M21 12a9 9 0 1 1-2.64-6.36" />
+													<path d="M21 3v6h-6" />
+												</svg>
 												{routeLoading ? 'Refreshing...' : 'Refresh'}
 											</button>
 										</div>
@@ -2842,14 +3111,6 @@
 											class="rounded-[18px] border border-[var(--danger)]/20 bg-[var(--danger-soft)] px-4 py-3 text-sm text-[var(--danger)]"
 										>
 											{routeError}
-										</div>
-									{/if}
-
-									{#if routeMessage}
-										<div
-											class="rounded-[18px] border border-[var(--border)] bg-[var(--primary-soft)] px-4 py-3 text-sm text-[var(--text)]"
-										>
-											{routeMessage}
 										</div>
 									{/if}
 
@@ -2956,26 +3217,49 @@
 											No routes yet. Refresh to try again.
 										</div>
 									{:else}
-										<div class="max-h-[260px] space-y-2 overflow-y-auto pr-1">
+										<div class="max-h-[280px] space-y-2 overflow-y-auto pr-1">
 											{#each routeOptions as route (route.routeId)}
 												<button
 													type="button"
 													onclick={() => selectRoute(route.routeId)}
 													disabled={tripStatus === 'tracking'}
-													class={`block w-full rounded-[20px] border px-4 py-3 text-left transition ${
+													class={`block w-full rounded-[24px] border px-4 py-3.5 text-left transition ${
 														selectedRouteId === route.routeId
-															? 'border-[#55c6ff]/45 bg-[#eef7ff]'
-															: 'border-[var(--border)] bg-[var(--surface)] hover:bg-[var(--primary-soft)]'
+															? 'border-[#b6dcff] bg-[linear-gradient(180deg,#f3f8ff,#eaf4ff)] shadow-[0_16px_34px_rgba(25,118,243,0.12)]'
+															: 'border-[var(--border)] bg-white hover:bg-[var(--primary-soft)]'
 													} disabled:cursor-default disabled:opacity-85`}
 												>
-													<div class="flex items-center justify-between gap-3">
+													<div class="flex items-start justify-between gap-3">
 														<div class="min-w-0">
-															<p class="text-sm font-medium text-[var(--text)]">{route.label}</p>
+															<div class="flex flex-wrap items-center gap-2">
+																<p class="text-sm font-semibold text-[var(--text)]">
+																	{route.label}
+																</p>
+																{#if selectedRouteId === route.routeId}
+																	<span
+																		class="rounded-full bg-[var(--primary)] px-2.5 py-1 text-[10px] font-semibold text-white"
+																	>
+																		Best overall
+																	</span>
+																{/if}
+															</div>
 															<p class="mt-1 text-xs text-[var(--muted)]">
 																{formatMinutes(route.durationSec)} • {formatDistance(
 																	route.distanceMeters
 																)} • {formatArrivalTime(route.arrivalTime)}
 															</p>
+															<div class="mt-2 flex flex-wrap gap-1.5">
+																<span
+																	class="rounded-full bg-[var(--surface)] px-2.5 py-1 text-[11px] font-medium text-[var(--muted)]"
+																>
+																	{formatTollEstimate(route.estimatedTollCostUsd)}
+																</span>
+																<span
+																	class="rounded-full bg-[var(--surface)] px-2.5 py-1 text-[11px] font-medium text-[var(--muted)]"
+																>
+																	{formatFuelEstimate(route.estimatedFuelLiters)}
+																</span>
+															</div>
 														</div>
 														<div class="flex shrink-0 items-center gap-2">
 															<span
@@ -2983,26 +3267,31 @@
 															>
 																{getTrafficLabel(route.trafficLevel)}
 															</span>
-															{#if selectedRouteId === route.routeId}
-																<span
-																	class="rounded-full bg-[var(--primary)] px-2.5 py-1 text-[11px] font-semibold text-white"
-																>
-																	Selected
-																</span>
-															{/if}
 														</div>
 													</div>
 												</button>
 											{/each}
 										</div>
 
-										<div class="grid grid-cols-2 gap-2">
+										<div class="grid grid-cols-2 gap-2 pt-1">
 											<button
 												type="button"
 												onclick={beginTrip}
 												disabled={!selectedRoute || tripStatus === 'tracking' || tripBusy !== null}
-												class="rounded-[20px] bg-[var(--primary)] px-4 py-3 text-sm font-semibold text-white disabled:opacity-50"
+												class="inline-flex items-center justify-center gap-2 rounded-[22px] bg-[var(--primary)] px-4 py-3.5 text-sm font-semibold text-white shadow-[0_16px_32px_rgba(25,118,243,0.24)] hover:bg-[var(--primary-strong)] disabled:bg-[var(--surface-muted)] disabled:text-[var(--muted)] disabled:shadow-none"
 											>
+												<svg
+													viewBox="0 0 24 24"
+													class="h-4 w-4"
+													fill="none"
+													stroke="currentColor"
+													stroke-width="2.2"
+													stroke-linecap="round"
+													stroke-linejoin="round"
+												>
+													<path d="M5 12h14" />
+													<path d="m13 5 7 7-7 7" />
+												</svg>
 												{tripBusy === 'starting'
 													? 'Starting...'
 													: tripStatus === 'tracking'
@@ -3013,8 +3302,19 @@
 												type="button"
 												onclick={markArrived}
 												disabled={tripStatus !== 'tracking' || tripBusy !== null}
-												class="rounded-[20px] border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-sm font-semibold text-[var(--text)] disabled:opacity-50"
+												class="inline-flex items-center justify-center gap-2 rounded-[22px] border border-[var(--border)] bg-white px-4 py-3.5 text-sm font-semibold text-[var(--text)] shadow-[0_10px_22px_rgba(15,23,42,0.04)] disabled:opacity-50"
 											>
+												<svg
+													viewBox="0 0 24 24"
+													class="h-4 w-4"
+													fill="none"
+													stroke="currentColor"
+													stroke-width="2.2"
+													stroke-linecap="round"
+													stroke-linejoin="round"
+												>
+													<path d="m5 12 4 4L19 6" />
+												</svg>
 												{tripBusy === 'arriving' ? 'Saving...' : 'Arrived'}
 											</button>
 										</div>
@@ -3025,7 +3325,7 @@
 							<button
 								type="button"
 								onclick={() => (routeSheetOpen = true)}
-								class="w-full rounded-[28px] border border-[var(--border)] bg-white/95 p-4 text-left shadow-[var(--shadow-float)] backdrop-blur-2xl"
+								class="w-full rounded-[28px] border border-[var(--border)] bg-[var(--surface)] p-4 text-left shadow-[var(--shadow-float)]"
 							>
 								<p class="text-[10px] tracking-[0.28em] text-[var(--muted)] uppercase">
 									Route ready
@@ -3054,33 +3354,76 @@
 					<div
 						class={`pointer-events-auto relative isolate flex w-full flex-col overflow-hidden transition-all ${
 							activeTab === 'pulse'
-								? `max-w-[520px] rounded-[32px] border border-[var(--border)] bg-white/95 text-[var(--text)] shadow-[var(--shadow-float)] ${
-										drawerExpanded ? 'max-h-[74svh] sm:max-h-[640px]' : 'max-h-[118px]'
-									}`
-								: `max-w-[680px] rounded-[32px] border border-[var(--border)] bg-white/95 text-[var(--text)] shadow-[var(--shadow-float)] ${
+								? `max-w-[560px] rounded-t-[30px] border border-black/8 bg-white text-[var(--text)] shadow-[0_-18px_48px_rgba(15,23,42,0.12)] ${reportSheetHeightClass}`
+								: `max-w-[680px] rounded-[32px] border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] shadow-[var(--shadow-float)] ${
 										drawerExpanded ? 'max-h-[82svh]' : 'max-h-[188px]'
 									}`
 						}`}
 					>
-						<button
-							type="button"
-							onclick={toggleActiveDrawer}
-							class={activeTab === 'pulse'
-								? 'w-full px-5 pt-4 pb-3 text-left'
-								: 'relative z-10 w-full bg-white/95 px-4 py-4 text-left sm:px-5'}
-						>
-							{#if activeTab === 'pulse'}
-								<div class="flex flex-col items-center gap-2 pb-1">
-									<div class="h-1.5 w-14 rounded-full bg-black/12"></div>
-									{#if !drawerExpanded}
-										<div
-											class="flex h-12 w-12 items-center justify-center rounded-full bg-white shadow-[0_10px_24px_rgba(0,0,0,0.08)]"
-										>
-											<IncidentTypeIcon type={selectedType} class="h-8 w-8" />
+						{#if activeTab === 'pulse'}
+							<div class="border-b border-black/6 px-4 pt-3 pb-3">
+								<div class="flex flex-col items-center gap-3">
+									<button
+										type="button"
+										onclick={toggleActiveDrawer}
+										class="flex w-full flex-col items-center gap-3 text-left"
+									>
+										<div class="h-1.5 w-14 rounded-full bg-black/12"></div>
+										<div class="flex w-full items-center justify-between gap-3">
+											<div class="min-w-0">
+												<p class="text-[10px] tracking-[0.24em] text-[var(--muted)] uppercase">
+													Street report
+												</p>
+												<p class="mt-1 text-lg font-semibold tracking-[-0.03em] text-[#141414]">
+													{reportSheetState === 'collapsed'
+														? 'Map first'
+														: reportSheetState === 'half'
+															? 'Report conditions'
+															: 'Report details'}
+												</p>
+											</div>
+											<span
+												class={`max-w-[210px] truncate rounded-full px-3 py-1.5 text-xs font-medium ${
+													weather?.tone === 'storm' || weather?.tone === 'rain'
+														? 'bg-[#fff1d6] text-[#8a5a00]'
+														: 'bg-[#f3f4f6] text-[#566273]'
+												}`}
+											>
+												{getWeatherSummaryPill(weather)}
+											</span>
 										</div>
-									{/if}
+									</button>
+
+									<div class="flex w-full justify-end">
+										<button
+											type="button"
+											onclick={handleQuickReportAction}
+											disabled={reportSubmitting}
+											class="inline-flex items-center gap-2 rounded-full bg-[#fff1d6] px-3 py-1.5 text-xs font-semibold text-[#8a5a00] shadow-[0_8px_18px_rgba(217,119,6,0.12)] disabled:opacity-50"
+										>
+											<svg
+												viewBox="0 0 24 24"
+												class="h-3.5 w-3.5"
+												fill="none"
+												stroke="currentColor"
+												stroke-width="2.2"
+												stroke-linecap="round"
+												stroke-linejoin="round"
+											>
+												<path d="M12 5v14" />
+												<path d="M5 12h14" />
+											</svg>
+											Quick report
+										</button>
+									</div>
 								</div>
-							{:else}
+							</div>
+						{:else}
+							<button
+								type="button"
+								onclick={toggleActiveDrawer}
+								class="relative z-10 w-full bg-[var(--surface)] px-4 py-4 text-left sm:px-5"
+							>
 								<div class="flex items-start justify-between gap-4">
 									<div class="min-w-0">
 										<div class="flex items-center gap-3">
@@ -3152,8 +3495,8 @@
 										</svg>
 									</span>
 								</div>
-							{/if}
-						</button>
+							</button>
+						{/if}
 
 						<div
 							class={`relative z-10 min-h-0 overflow-y-auto border-t px-4 pb-4 ${
@@ -3161,7 +3504,7 @@
 							} ${activeTab === 'pulse' ? '' : 'bg-[rgba(248,248,246,0.98)]'}`}
 						>
 							{#if activeTab === 'pulse'}
-								<div class="px-1 pt-3 pb-4">
+								<div class="px-0 pt-3 pb-[calc(env(safe-area-inset-bottom,0px)+10px)]">
 									{#if reportError}
 										<div
 											class="mb-3 rounded-[16px] border border-[#f1b7a4] bg-[#fff0eb] px-3 py-2 text-xs font-medium text-[#7d2c1d]"
@@ -3178,32 +3521,290 @@
 										</div>
 									{/if}
 
-									<div class="grid grid-cols-3 gap-3">
-										{#each INCIDENT_TYPES as incidentType (incidentType)}
-											<button
-												type="button"
-												aria-label={`Report ${INCIDENT_LABELS[incidentType].en}`}
-												title={INCIDENT_LABELS[incidentType].en}
-												onclick={() => void submitIncident(incidentType)}
-												disabled={reportSubmitting}
-												class={`flex items-center justify-center rounded-[26px] p-2.5 transition ${
-													selectedType === incidentType
-														? 'bg-[#eef6ff] ring-2 ring-[#1e88f7] ring-offset-2 ring-offset-[#f8fafc]'
-														: 'bg-transparent'
-												} disabled:opacity-50`}
+									{#if reportSheetState !== 'collapsed'}
+										<div class="space-y-3">
+											<div
+												class="rounded-[24px] bg-[#f3f4f6] px-4 py-4 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.05)]"
 											>
-												<span
-													class={`flex h-[80px] w-[80px] items-center justify-center rounded-full border sm:h-[88px] sm:w-[88px] ${
-														selectedType === incidentType
-															? 'border-[#1e88f7] bg-white shadow-[0_12px_30px_rgba(30,136,247,0.18)]'
-															: 'border-black/6 bg-white shadow-[0_10px_28px_rgba(17,24,39,0.06)]'
-													}`}
-												>
-													<IncidentTypeIcon type={incidentType} class="h-10 w-10 sm:h-12 sm:w-12" />
-												</span>
-											</button>
-										{/each}
-									</div>
+												<div class="flex items-center gap-3">
+													<div
+														class={`flex h-12 w-12 shrink-0 items-center justify-center rounded-[18px] ${
+															weather?.tone === 'storm' || weather?.tone === 'rain'
+																? 'bg-[#fff1d6] text-[#8a5a00]'
+																: 'bg-white text-[#4b5563]'
+														}`}
+													>
+														{#if getWeatherIcon(weather) === 'storm'}
+															<svg
+																viewBox="0 0 24 24"
+																class="h-6 w-6"
+																fill="none"
+																stroke="currentColor"
+																stroke-width="2"
+																stroke-linecap="round"
+																stroke-linejoin="round"
+															>
+																<path d="M6 16a4 4 0 1 1 .9-7.9A5 5 0 0 1 17 9a3 3 0 0 1 1 5.8" />
+																<path d="m13 12-3 5h3l-2 5 6-8h-4l2-4Z" />
+															</svg>
+														{:else if getWeatherIcon(weather) === 'rain'}
+															<svg
+																viewBox="0 0 24 24"
+																class="h-6 w-6"
+																fill="none"
+																stroke="currentColor"
+																stroke-width="2"
+																stroke-linecap="round"
+																stroke-linejoin="round"
+															>
+																<path d="M6 15a4 4 0 1 1 .9-7.9A5 5 0 0 1 17 8a3 3 0 0 1 1 5.8" />
+																<path d="M8 19v.01" />
+																<path d="M12 19v.01" />
+																<path d="M16 19v.01" />
+															</svg>
+														{:else if getWeatherIcon(weather) === 'watch'}
+															<svg
+																viewBox="0 0 24 24"
+																class="h-6 w-6"
+																fill="none"
+																stroke="currentColor"
+																stroke-width="2"
+																stroke-linecap="round"
+																stroke-linejoin="round"
+															>
+																<path d="M6 15a4 4 0 1 1 .9-7.9A5 5 0 0 1 17 8a3 3 0 0 1 1 5.8" />
+																<path d="M12 16v4" />
+																<path d="M10 18h4" />
+															</svg>
+														{:else}
+															<svg
+																viewBox="0 0 24 24"
+																class="h-6 w-6"
+																fill="none"
+																stroke="currentColor"
+																stroke-width="2"
+																stroke-linecap="round"
+																stroke-linejoin="round"
+															>
+																<circle cx="12" cy="12" r="4" />
+																<path d="M12 2v2" />
+																<path d="M12 20v2" />
+																<path d="m4.93 4.93 1.41 1.41" />
+																<path d="m17.66 17.66 1.41 1.41" />
+																<path d="M2 12h2" />
+																<path d="M20 12h2" />
+																<path d="m6.34 17.66-1.41 1.41" />
+																<path d="m19.07 4.93-1.41 1.41" />
+															</svg>
+														{/if}
+													</div>
+													<div class="min-w-0 flex-1">
+														<p class="truncate text-sm font-semibold text-[#111827]">
+															{weather?.headline ??
+																(weatherLoading ? 'Loading local weather' : 'Weather unavailable')}
+														</p>
+														<p class="mt-1 truncate text-xs text-[#6b7280]">
+															{weather?.conditionLabel ??
+																(weatherLoading ? 'Checking conditions' : 'Stand by')}
+														</p>
+													</div>
+												</div>
+
+												<div class="mt-3 grid grid-cols-3 gap-2">
+													<div class="rounded-[18px] bg-white px-3 py-2.5">
+														<p class="text-[10px] tracking-[0.18em] text-[#9ca3af] uppercase">
+															Temp
+														</p>
+														<p class="mt-1 text-sm font-semibold text-[#111827]">
+															{weather ? formatTemperature(weather.temperatureC) : '--'}
+														</p>
+													</div>
+													<div class="rounded-[18px] bg-white px-3 py-2.5">
+														<p class="text-[10px] tracking-[0.18em] text-[#9ca3af] uppercase">
+															Rain
+														</p>
+														<p class="mt-1 text-sm font-semibold text-[#111827]">
+															{weather ? `${weather.precipitationChancePercent}%` : '--'}
+														</p>
+													</div>
+													<div class="rounded-[18px] bg-white px-3 py-2.5">
+														<p class="text-[10px] tracking-[0.18em] text-[#9ca3af] uppercase">
+															Wind
+														</p>
+														<p class="mt-1 text-sm font-semibold text-[#111827]">
+															{weather ? formatWindSpeed(weather.windSpeedKph) : '--'}
+														</p>
+													</div>
+												</div>
+
+												{#if reportSheetState === 'full'}
+													<p class="mt-3 text-sm leading-5 text-[#6b7280]">
+														{weatherError
+															? weatherError
+															: (weather?.recommendation ??
+																'Checking whether rain could affect road conditions right now.')}
+													</p>
+												{/if}
+											</div>
+
+											<div class="grid grid-cols-2 gap-3 sm:grid-cols-3">
+												{#each INCIDENT_TYPES as incidentType (incidentType)}
+													<button
+														type="button"
+														aria-label={`Report ${REPORT_TYPE_LABELS[incidentType]}`}
+														title={REPORT_TYPE_LABELS[incidentType]}
+														onclick={() => {
+															selectedType = incidentType;
+															if (reportSheetState === 'half') {
+																void submitIncident(incidentType);
+															}
+														}}
+														disabled={reportSubmitting}
+														class={`rounded-[22px] border px-4 py-4 text-left shadow-[0_8px_24px_rgba(15,23,42,0.06)] transition ${
+															selectedType === incidentType
+																? 'border-[#d97706]/25 bg-[#fff8eb]'
+																: 'border-black/6 bg-[#f3f4f6] hover:bg-[#eceef1]'
+														} disabled:opacity-50`}
+													>
+														<div class="flex items-center gap-3">
+															<div
+																class="flex h-11 w-11 shrink-0 items-center justify-center rounded-[16px] bg-white"
+															>
+																<IncidentTypeIcon type={incidentType} class="h-6 w-6" />
+															</div>
+															<div class="min-w-0">
+																<p class="text-sm font-semibold text-[#111827]">
+																	{REPORT_TYPE_LABELS[incidentType]}
+																</p>
+																<p class="mt-0.5 text-xs text-[#6b7280]">
+																	{INCIDENT_LABELS[incidentType].en}
+																</p>
+															</div>
+														</div>
+													</button>
+												{/each}
+											</div>
+
+											{#if reportSheetState === 'full'}
+												<div class="space-y-3">
+													<div
+														class="rounded-[24px] bg-[#f3f4f6] px-4 py-4 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.05)]"
+													>
+														<div class="flex items-start justify-between gap-3">
+															<div>
+																<p class="text-sm font-semibold text-[#111827]">Report details</p>
+																<p class="mt-1 text-xs text-[#6b7280]">
+																	Add context and choose where this report should be pinned.
+																</p>
+															</div>
+															<div class="flex gap-2">
+																<button
+																	type="button"
+																	onclick={() => {
+																		if (currentLocation) setReportLocation(currentLocation, 'gps');
+																	}}
+																	class="rounded-full bg-white px-3 py-1.5 text-xs font-medium text-[#4b5563]"
+																>
+																	Use GPS
+																</button>
+																<button
+																	type="button"
+																	onclick={() => setReportSheetState('half')}
+																	class="rounded-full bg-white px-3 py-1.5 text-xs font-medium text-[#4b5563]"
+																>
+																	Quick mode
+																</button>
+															</div>
+														</div>
+														<div
+															class="mt-3 rounded-[18px] bg-white px-3 py-2.5 text-xs text-[#6b7280]"
+														>
+															{reportLocation
+																? `Pinned at ${formatPointLabel(reportLocation)}`
+																: currentLocation
+																	? 'Using live GPS if you submit now.'
+																	: 'Wait for GPS or double-click the map to drop a pin.'}
+														</div>
+														<label class="mt-3 block">
+															<span class="text-[10px] tracking-[0.18em] text-[#9ca3af] uppercase"
+																>Note</span
+															>
+															<textarea
+																rows="3"
+																bind:value={reportNote}
+																placeholder="What is happening here?"
+																class="mt-2 w-full rounded-[18px] border border-black/6 bg-white px-3 py-3 text-sm text-[#111827] outline-none placeholder:text-[#9ca3af]"
+															></textarea>
+														</label>
+														<button
+															type="button"
+															onclick={() => void submitIncident(selectedType)}
+															disabled={reportSubmitting}
+															class="mt-3 w-full rounded-[20px] bg-[#d97706] px-4 py-3 text-sm font-semibold text-white disabled:bg-[var(--surface-muted)] disabled:text-[var(--muted)]"
+														>
+															{reportSubmitting
+																? 'Sending report...'
+																: `Submit ${REPORT_TYPE_LABELS[selectedType]}`}
+														</button>
+													</div>
+
+													<div
+														class="rounded-[24px] bg-[#f3f4f6] px-4 py-4 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.05)]"
+													>
+														<div class="flex items-center justify-between gap-3">
+															<div>
+																<p class="text-sm font-semibold text-[#111827]">Recent history</p>
+																<p class="mt-1 text-xs text-[#6b7280]">
+																	Your last reports and their current status.
+																</p>
+															</div>
+															<span
+																class="rounded-full bg-white px-3 py-1 text-xs font-medium text-[#6b7280]"
+															>
+																{myIncidents.length} total
+															</span>
+														</div>
+														<div class="mt-3 space-y-2">
+															{#if myIncidents.length === 0}
+																<div
+																	class="rounded-[18px] bg-white px-3 py-3 text-sm text-[#6b7280]"
+																>
+																	No reports yet.
+																</div>
+															{:else}
+																{#each myIncidents.slice(0, 6) as incident (incident._id)}
+																	<div
+																		class="flex items-center justify-between gap-3 rounded-[18px] bg-white px-3 py-3"
+																	>
+																		<div class="flex min-w-0 items-center gap-3">
+																			<div
+																				class="flex h-10 w-10 shrink-0 items-center justify-center rounded-[14px] bg-[#f3f4f6]"
+																			>
+																				<IncidentTypeIcon type={incident.type} class="h-5 w-5" />
+																			</div>
+																			<div class="min-w-0">
+																				<p class="truncate text-sm font-semibold text-[#111827]">
+																					{REPORT_TYPE_LABELS[incident.type]}
+																				</p>
+																				<p class="mt-0.5 text-xs text-[#6b7280]">
+																					{formatShortDate(incident.createdAt)}
+																				</p>
+																			</div>
+																		</div>
+																		<span
+																			class={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold ${getIncidentStatusClass(incident.status)}`}
+																		>
+																			{incident.status === 'active' ? 'Active' : 'Expired'}
+																		</span>
+																	</div>
+																{/each}
+															{/if}
+														</div>
+													</div>
+												</div>
+											{/if}
+										</div>
+									{/if}
 								</div>
 							{:else}
 								<div class="pt-4">

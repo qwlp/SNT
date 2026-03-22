@@ -4,14 +4,19 @@
 :root {
 	--canvas: #f4f7fb;
 	--surface: #ffffff;
-	--surface-muted: #edf3f9;
+	--surface-muted: #eff5fb;
 	--surface-strong: #dce8f5;
+	--surface-glass: #ffffff;
 	--border: #d7e2ee;
-	--border-strong: #a6bfd8;
+	--border-strong: #9eb8d3;
 	--text: #16202a;
-	--muted: #607285;
-	--primary: #1e88f7;
-	--primary-soft: #eaf4ff;
+	--muted: #64748b;
+	--primary: #1976f3;
+	--primary-soft: #ebf4ff;
+	--primary-strong: #0f5fcb;
+	--warning: #b7791f;
+	--warning-soft: #fff3d6;
+	--warning-border: #f1d38a;
 	--accent: #2b7a78;
 	--accent-soft: #e5f4f3;
 	--danger: #c2410c;
@@ -19,26 +24,22 @@
 	--map-bg: #eef4fa;
 	--map-border: #cad8e6;
 	--map-text: #16202a;
-	--shadow-soft: 0 12px 30px rgba(15, 23, 42, 0.06);
-	--shadow-panel: 0 20px 54px rgba(15, 23, 42, 0.12);
-	--shadow-float: 0 24px 64px rgba(15, 23, 42, 0.14);
+	--shadow-soft: 0 16px 40px rgba(15, 23, 42, 0.07);
+	--shadow-panel: 0 22px 56px rgba(15, 23, 42, 0.12);
+	--shadow-float: 0 28px 72px rgba(15, 23, 42, 0.16);
 }
 
 @layer base {
 	html {
 		background: var(--canvas);
 		color: var(--text);
-		font-family: 'Helvetica Neue', 'Noto Sans Khmer', 'Noto Sans', sans-serif;
+		font-family: 'Manrope', 'Noto Sans Khmer', 'Noto Sans', sans-serif;
 	}
 
 	body {
 		min-height: 100vh;
 		background: var(--canvas);
 		color: var(--text);
-	}
-
-	body * {
-		border-radius: 0 !important;
 	}
 
 	body
