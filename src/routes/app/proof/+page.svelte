@@ -84,19 +84,19 @@
 		</div>
 	</div>
 {:else}
-	<div class="min-h-screen bg-[#f6f7f9] text-[#141414]">
+	<div class="min-h-screen bg-[var(--canvas)] text-[var(--text)]">
 		<div class="mx-auto max-w-[1440px] px-4 py-4 sm:px-6 lg:px-8">
 			<div class="grid gap-4 lg:grid-cols-[220px_minmax(0,1fr)] lg:items-start">
 				<AppNavigation active="proof" summary={summaryItems} />
 
 				<main class="space-y-4">
 					<header
-						class="rounded-[28px] border border-black/8 bg-[rgba(248,248,246,0.98)] p-4 shadow-[0_12px_30px_rgba(17,24,39,0.06)] sm:p-5"
+						class="rounded-[28px] border border-[var(--border)] bg-white/95 p-4 shadow-[var(--shadow-soft)] backdrop-blur-xl sm:p-5"
 					>
 						<div class="flex flex-wrap items-center justify-between gap-3">
 							<div class="flex items-center gap-3">
 								<div
-									class="flex h-12 w-12 items-center justify-center rounded-[16px] border border-black/8 bg-white text-[#141414] shadow-[0_8px_20px_rgba(17,24,39,0.05)]"
+									class="flex h-12 w-12 items-center justify-center rounded-[16px] border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] shadow-[var(--shadow-soft)]"
 								>
 									<svg
 										viewBox="0 0 24 24"
@@ -114,8 +114,8 @@
 									</svg>
 								</div>
 								<div>
-									<p class="text-sm font-semibold text-[#141414]">Proof</p>
-									<div class="mt-1 flex items-center gap-3 text-sm text-black/56">
+									<p class="text-sm font-semibold text-[var(--text)]">Proof</p>
+									<div class="mt-1 flex items-center gap-3 text-sm text-[var(--muted)]">
 										<span class="inline-flex items-center gap-1.5">
 											<svg
 												viewBox="0 0 24 24"

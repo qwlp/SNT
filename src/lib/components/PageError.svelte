@@ -20,7 +20,7 @@
 
 <div class="min-h-screen bg-[var(--canvas)] px-4 py-8 text-[var(--text)]">
 	<div
-		class="mx-auto max-w-2xl rounded-[10px] border border-[var(--border)] bg-[var(--surface)] p-6 shadow-[0_2px_8px_rgba(36,31,23,0.08)]"
+		class="mx-auto max-w-2xl rounded-[10px] border border-[var(--border)] bg-[var(--surface)] p-6 shadow-[var(--shadow-soft)]"
 	>
 		<h1 class="text-3xl font-semibold">{parsedError.message}</h1>
 		<p class="mt-3 text-sm text-[var(--muted)]">Error type: {parsedError.kind}</p>

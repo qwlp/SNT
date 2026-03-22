@@ -2,23 +2,26 @@
 @plugin '@tailwindcss/typography';
 
 :root {
-	--canvas: #f3efe7;
-	--surface: #fffdf8;
-	--surface-muted: #ece4d6;
-	--surface-strong: #ddd0bc;
-	--border: #d4c7b2;
-	--border-strong: #b49e80;
-	--text: #241f17;
-	--muted: #62584a;
-	--primary: #6e5031;
-	--primary-soft: #ecdecb;
-	--accent: #335a4f;
-	--accent-soft: #d8e4de;
-	--danger: #9f4f3e;
-	--danger-soft: #f1ddd8;
-	--map-bg: #232821;
-	--map-border: #3e463d;
-	--map-text: #edf1ea;
+	--canvas: #f4f7fb;
+	--surface: #ffffff;
+	--surface-muted: #edf3f9;
+	--surface-strong: #dce8f5;
+	--border: #d7e2ee;
+	--border-strong: #a6bfd8;
+	--text: #16202a;
+	--muted: #607285;
+	--primary: #1e88f7;
+	--primary-soft: #eaf4ff;
+	--accent: #2b7a78;
+	--accent-soft: #e5f4f3;
+	--danger: #c2410c;
+	--danger-soft: #ffebe3;
+	--map-bg: #eef4fa;
+	--map-border: #cad8e6;
+	--map-text: #16202a;
+	--shadow-soft: 0 12px 30px rgba(15, 23, 42, 0.06);
+	--shadow-panel: 0 20px 54px rgba(15, 23, 42, 0.12);
+	--shadow-float: 0 24px 64px rgba(15, 23, 42, 0.14);
 }
 
 @layer base {

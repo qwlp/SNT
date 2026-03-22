@@ -93,7 +93,7 @@
 
 					<div class="grid gap-4 md:grid-cols-3">
 						<section
-							class="rounded-[10px] border border-[var(--border)] bg-[var(--surface)] p-4 shadow-[0_2px_8px_rgba(36,31,23,0.08)]"
+							class="rounded-[10px] border border-[var(--border)] bg-[var(--surface)] p-4 shadow-[var(--shadow-soft)]"
 						>
 							<h2 class="text-base font-semibold">Report</h2>
 							<p class="mt-2 text-sm leading-6 text-[var(--muted)]">
@@ -101,7 +101,7 @@
 							</p>
 						</section>
 						<section
-							class="rounded-[10px] border border-[var(--border)] bg-[var(--surface)] p-4 shadow-[0_2px_8px_rgba(36,31,23,0.08)]"
+							class="rounded-[10px] border border-[var(--border)] bg-[var(--surface)] p-4 shadow-[var(--shadow-soft)]"
 						>
 							<h2 class="text-base font-semibold">Route</h2>
 							<p class="mt-2 text-sm leading-6 text-[var(--muted)]">
@@ -109,7 +109,7 @@
 							</p>
 						</section>
 						<section
-							class="rounded-[10px] border border-[var(--border)] bg-[var(--surface)] p-4 shadow-[0_2px_8px_rgba(36,31,23,0.08)]"
+							class="rounded-[10px] border border-[var(--border)] bg-[var(--surface)] p-4 shadow-[var(--shadow-soft)]"
 						>
 							<h2 class="text-base font-semibold">Proof</h2>
 							<p class="mt-2 text-sm leading-6 text-[var(--muted)]">
@@ -121,7 +121,7 @@
 				</div>
 
 				<aside
-					class="rounded-[10px] border border-[var(--border)] bg-[var(--surface)] p-5 shadow-[0_2px_8px_rgba(36,31,23,0.08)]"
+					class="rounded-[10px] border border-[var(--border)] bg-[var(--surface)] p-5 shadow-[var(--shadow-soft)]"
 				>
 					<h2 class="text-lg font-semibold">Launch campuses</h2>
 					<p class="mt-2 text-sm text-[var(--muted)]">
@@ -165,7 +165,7 @@
 				<div>
 					<h2 class="text-2xl font-semibold">What the pilot covers</h2>
 					<div
-						class="mt-4 rounded-[10px] border border-[var(--border)] bg-[var(--surface)] p-5 shadow-[0_2px_8px_rgba(36,31,23,0.08)]"
+						class="mt-4 rounded-[10px] border border-[var(--border)] bg-[var(--surface)] p-5 shadow-[var(--shadow-soft)]"
 					>
 						<ul class="space-y-3 text-sm leading-6 text-[var(--muted)]">
 							<li>Phnom Penh only, with routing tuned for campus corridors and alley shortcuts.</li>

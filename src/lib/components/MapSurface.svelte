@@ -870,7 +870,7 @@
 				paint: {
 					'circle-radius': 9,
 					'circle-color': '#7fc7ae',
-					'circle-stroke-color': '#fffdf8',
+					'circle-stroke-color': '#ffffff',
 					'circle-stroke-width': 3
 				}
 			});
@@ -951,11 +951,11 @@
 		wrapper.className = 'space-y-1';
 
 		const heading = document.createElement('p');
-		heading.className = 'text-sm font-semibold text-[#241f17]';
+		heading.className = 'text-sm font-semibold text-[var(--text)]';
 		heading.textContent = title;
 
 		const body = document.createElement('p');
-		body.className = 'text-xs text-[#5d584d]';
+		body.className = 'text-xs text-[var(--muted)]';
 		body.textContent = detail;
 
 		wrapper.append(heading, body);
@@ -973,6 +973,7 @@
 		const canvasContainer = map.getCanvasContainer();
 		let longPressTimeoutId: number | null = null;
 		let touchStartPoint: { x: number; y: number } | null = null;
+		let lastDestinationPickAt = 0;
 
 		const interactiveLayerIds = [
 			ACTIVE_ROUTE_LAYER_ID,
@@ -1042,8 +1043,20 @@
 			showPopup(coordinates, label, destinationMoveHint);
 		};
 
+		const pickDestination = (point: GeoPoint) => {
+			if (!onDestinationPick) return;
+
+			const now = Date.now();
+			if (now - lastDestinationPickAt < 400) {
+				return;
+			}
+
+			lastDestinationPickAt = now;
+			onDestinationPick(point);
+		};
+
 		const handleMapDoubleClick = (event: MapboxMapMouseEvent) => {
-			onDestinationPick?.({
+			pickDestination({
 				lat: event.lngLat.lat,
 				lng: event.lngLat.lng
 			});
@@ -1074,10 +1087,11 @@
 					touchStartPoint.y - bounds.top
 				]);
 
-				onDestinationPick({
+				pickDestination({
 					lat: point.lat,
 					lng: point.lng
 				});
+				touchStartPoint = null;
 				clearLongPressTimeout();
 			}, LONG_PRESS_MS);
 		};
@@ -1105,6 +1119,11 @@
 			touchStartPoint = null;
 		};
 
+		const handleContextMenu = (event: MouseEvent) => {
+			if (!onDestinationPick || Date.now() - lastDestinationPickAt > 900) return;
+			event.preventDefault();
+		};
+
 		for (const layerId of interactiveLayerIds) {
 			map.on('mouseenter', layerId, handleMouseEnter);
 			map.on('mouseleave', layerId, handleMouseLeave);
@@ -1122,6 +1141,7 @@
 		canvasContainer.addEventListener('touchmove', handleTouchMove, { passive: true });
 		canvasContainer.addEventListener('touchend', handleTouchEnd, { passive: true });
 		canvasContainer.addEventListener('touchcancel', handleTouchEnd, { passive: true });
+		canvasContainer.addEventListener('contextmenu', handleContextMenu);
 
 		return () => {
 			for (const layerId of interactiveLayerIds) {
@@ -1141,6 +1161,7 @@
 			canvasContainer.removeEventListener('touchmove', handleTouchMove);
 			canvasContainer.removeEventListener('touchend', handleTouchEnd);
 			canvasContainer.removeEventListener('touchcancel', handleTouchEnd);
+			canvasContainer.removeEventListener('contextmenu', handleContextMenu);
 			clearLongPressTimeout();
 		};
 	};
@@ -1409,7 +1430,7 @@
 				}`}
 			>
 				<div
-					class="flex flex-col gap-2 rounded-[28px] border border-[var(--border)] bg-[rgba(255,253,248,0.92)] p-2 shadow-[0_18px_48px_rgba(36,31,23,0.16)] backdrop-blur-xl"
+					class="flex flex-col gap-2 rounded-[28px] border border-[var(--border)] bg-white/90 p-2 shadow-[var(--shadow-panel)] backdrop-blur-xl"
 				>
 					<button
 						type="button"
@@ -1554,7 +1575,7 @@
 
 <style>
 	:global(.mapboxgl-map) {
-		background: #232821;
+		background: var(--map-bg);
 		font-family: inherit;
 	}
 
@@ -1562,8 +1583,8 @@
 	:global(.mapboxgl-ctrl-scale),
 	:global(.mapboxgl-ctrl-attrib) {
 		border-color: var(--border);
-		box-shadow: 0 10px 30px rgba(36, 31, 23, 0.14);
-		background: rgba(255, 253, 248, 0.96);
+		box-shadow: var(--shadow-soft);
+		background: rgb(255 255 255 / 0.94);
 		color: var(--text);
 	}
 
@@ -1572,16 +1593,16 @@
 	}
 
 	:global(.mapboxgl-popup-content) {
-		border: 1px solid rgba(36, 31, 23, 0.08);
+		border: 1px solid rgb(215 226 238 / 0.9);
 		border-radius: 10px;
-		box-shadow: 0 2px 10px rgba(36, 31, 23, 0.12);
-		background: #fffdf8;
+		box-shadow: 0 10px 30px rgba(15, 23, 42, 0.12);
+		background: var(--surface);
 		padding: 10px 12px;
 	}
 
 	:global(.mapboxgl-popup-tip) {
-		border-top-color: #fffdf8;
-		border-bottom-color: #fffdf8;
+		border-top-color: var(--surface);
+		border-bottom-color: var(--surface);
 	}
 
 	@media (max-width: 639px) {

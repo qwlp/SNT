@@ -4,8 +4,8 @@
 	"description": "Phnom Penh traffic reporting, routing, and proof certificates.",
 	"start_url": "/app",
 	"display": "standalone",
-	"background_color": "#15282f",
-	"theme_color": "#15282f",
+	"background_color": "#f4f7fb",
+	"theme_color": "#f4f7fb",
 	"icons": [
 		{
 			"src": "/icon-192.svg",

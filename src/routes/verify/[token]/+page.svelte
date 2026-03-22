@@ -18,7 +18,7 @@
 		</header>
 
 		<section
-			class="mt-6 rounded-[10px] border border-[var(--border)] bg-[var(--surface)] shadow-[0_2px_8px_rgba(36,31,23,0.08)]"
+			class="mt-6 rounded-[10px] border border-[var(--border)] bg-[var(--surface)] shadow-[var(--shadow-soft)]"
 		>
 			{#if !data.payload}
 				<div class="px-6 py-8">
