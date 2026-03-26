@@ -31,11 +31,15 @@ const getFuelLitersPer100Km = (mode: RoutingPreferences['mode']) => {
 	switch (mode) {
 		case 'scooter':
 			return 2.4;
+		case 'electric_car':
 		case 'bike':
 		case 'pedestrian':
 			return 0;
 		case 'heavy_vehicle':
 			return 24;
+		case 'diesel_car':
+			return 6.4;
+		case 'gas_car':
 		case 'car':
 		default:
 			return 7.8;
@@ -206,6 +210,12 @@ export const applyRoutingPreferences = ({
 			score += metrics.turnCount * 42 + metrics.uTurnCount * 360 + shortcutCount * 220;
 			chips.add('Heavy vehicle preset');
 			break;
+		case 'electric_car':
+			score += highwayShare * 70;
+			chips.add('Electric car profile');
+			break;
+		case 'diesel_car':
+		case 'gas_car':
 		case 'car':
 		default:
 			break;

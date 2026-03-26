@@ -42,6 +42,9 @@ const getMapboxProfile = (mode: RoutingPreferences['mode']) => {
 			return 'cycling';
 		case 'pedestrian':
 			return 'walking';
+		case 'gas_car':
+		case 'diesel_car':
+		case 'electric_car':
 		case 'car':
 		case 'scooter':
 		case 'heavy_vehicle':
@@ -60,6 +63,9 @@ const getFallbackSpeedMetersPerSecond = (mode: RoutingPreferences['mode']) => {
 			return 5.5;
 		case 'scooter':
 			return 7.5;
+		case 'gas_car':
+		case 'diesel_car':
+		case 'electric_car':
 		case 'car':
 		default:
 			return 8.5;

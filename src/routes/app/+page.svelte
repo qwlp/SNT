@@ -205,6 +205,9 @@
 		return 'Clear';
 	};
 	const getRoutingModeLabel = (mode: RoutingMode) => {
+		if (mode === 'gas_car' || mode === 'car') return 'Gas car';
+		if (mode === 'diesel_car') return 'Diesel car';
+		if (mode === 'electric_car') return 'Electric car';
 		if (mode === 'heavy_vehicle') return 'Heavy vehicle';
 		if (mode === 'pedestrian') return 'Pedestrian';
 		return mode.charAt(0).toUpperCase() + mode.slice(1);
@@ -215,12 +218,30 @@
 		if (priority === 'fastest') return 'Fastest';
 		return 'Balanced';
 	};
+	const getFuelPricePerLiterUsd = (mode: RoutingMode) => {
+		switch (mode) {
+			case 'diesel_car':
+			case 'heavy_vehicle':
+				return 1.28;
+			case 'electric_car':
+			case 'bike':
+			case 'pedestrian':
+				return 0;
+			case 'gas_car':
+			case 'car':
+			case 'scooter':
+			default:
+				return 1.32;
+		}
+	};
 	const formatFuelEstimate = (liters: number) =>
 		liters <= 0 ? 'No fuel' : `${liters.toFixed(liters >= 10 ? 0 : 1)} L`;
+	const formatUsdEstimate = (usd: number) =>
+		usd <= 0 ? 'No cost' : `$${usd.toFixed(usd >= 10 ? 0 : 2)}`;
+	const estimateFuelCostUsd = (liters: number, mode: RoutingMode) =>
+		Number((Math.max(0, liters) * getFuelPricePerLiterUsd(mode)).toFixed(2));
 	const formatTollEstimate = (usd: number) =>
 		usd <= 0.01 ? 'No tolls' : `$${usd.toFixed(usd >= 10 ? 0 : 2)}`;
-	const getRoleLabel = (role: 'citizen' | 'campus_rep' | undefined) =>
-		role === 'campus_rep' ? 'Campus rep' : 'Citizen';
 	const getIncidentStatusClass = (status: 'active' | 'expired') =>
 		status === 'active'
 			? 'bg-[#e8f7ee] text-[#20593b]'
@@ -439,6 +460,18 @@
 			? `${currentLocation.lat.toFixed(4)}, ${currentLocation.lng.toFixed(4)}`
 			: 'Waiting for live GPS fix'
 	);
+	const routePreviewFuelEstimate = $derived.by(() => {
+		const route = navigationRoute ?? selectedRoute;
+		if (!route) return null;
+
+		return {
+			modeLabel: getRoutingModeLabel(routingPreferences.mode),
+			litersLabel: formatFuelEstimate(route.estimatedFuelLiters),
+			costLabel: formatUsdEstimate(
+				estimateFuelCostUsd(route.estimatedFuelLiters, routingPreferences.mode)
+			)
+		};
+	});
 	const mobileRouteSheetPreviewLabel = $derived.by(() => {
 		if (tripStatus === 'tracking' && navigationRoute) {
 			return `Live • ${nextArrivalLabel}`;
@@ -1947,6 +1980,17 @@
 										<p class="mt-0.5 text-[0.66rem] text-[var(--muted)]">
 											{mobileRouteSheetPreviewLabel}
 										</p>
+										{#if routePreviewFuelEstimate}
+											<p
+												class="mt-1 flex flex-wrap items-center gap-x-1.5 text-[0.62rem] text-[var(--muted)]"
+											>
+												<span>{routePreviewFuelEstimate.modeLabel}</span>
+												<span aria-hidden="true">•</span>
+												<span>{routePreviewFuelEstimate.litersLabel}</span>
+												<span aria-hidden="true">•</span>
+												<span>{routePreviewFuelEstimate.costLabel} fuel</span>
+											</p>
+										{/if}
 									</div>
 									<div class="flex shrink-0 items-center gap-1">
 										{#if navigationRoute}
@@ -2014,6 +2058,11 @@
 											{#if selectedRoute}
 												<span class="truncate text-[0.7rem] text-[var(--muted)]">
 													{formatDistance(selectedRoute.distanceMeters)} • {nextArrivalLabel}
+												</span>
+											{/if}
+											{#if routePreviewFuelEstimate}
+												<span class="truncate text-[0.7rem] text-[var(--muted)]">
+													{routePreviewFuelEstimate.litersLabel} • {routePreviewFuelEstimate.costLabel}
 												</span>
 											{/if}
 										</div>
@@ -4065,57 +4114,11 @@
 							>
 								<div class="flex items-start justify-between gap-4">
 									<div class="min-w-0">
-										<div class="flex items-center gap-3">
-											<div
-												class="flex h-12 w-12 shrink-0 items-center justify-center rounded-[18px] bg-white text-[#141414] shadow-[0_10px_28px_rgba(17,24,39,0.08)]"
-											>
-												<svg
-													viewBox="0 0 24 24"
-													class="h-6 w-6"
-													fill="none"
-													stroke="currentColor"
-													stroke-width="2"
-													stroke-linecap="round"
-													stroke-linejoin="round"
-												>
-													<circle cx="12" cy="8" r="3.5" />
-													<path d="M5 19a7 7 0 0 1 14 0" />
-												</svg>
-											</div>
-											<div class="min-w-0">
-												<div class="flex flex-wrap items-center gap-2">
-													<span
-														class="flex h-5 w-5 items-center justify-center rounded-full bg-[#f1f2f4] text-black/58"
-													>
-														<svg
-															viewBox="0 0 24 24"
-															class="h-3.5 w-3.5"
-															fill="none"
-															stroke="currentColor"
-															stroke-width="2"
-															stroke-linecap="round"
-															stroke-linejoin="round"
-														>
-															<circle cx="12" cy="8" r="3.5" />
-															<path d="M5 19a7 7 0 0 1 14 0" />
-														</svg>
-													</span>
-													<p class="text-[10px] tracking-[0.28em] text-[var(--muted)] uppercase">
-														Account
-													</p>
-													<span
-														class="rounded-full border border-black/8 bg-white px-2.5 py-1 text-[11px] font-medium text-black/60"
-													>
-														{getRoleLabel(meQuery.data?.role)}
-													</span>
-												</div>
-												<p
-													class="mt-1 truncate text-[1.55rem] font-semibold tracking-[-0.04em] text-[#141414]"
-												>
-													{meQuery.data?.displayName ?? panelCopy[activeTab].title}
-												</p>
-											</div>
-										</div>
+										<p
+											class="truncate pt-1 text-[1.55rem] font-semibold tracking-[-0.04em] text-[#141414]"
+										>
+											{meQuery.data?.displayName ?? panelCopy[activeTab].title}
+										</p>
 									</div>
 									<span
 										class="inline-flex shrink-0 items-center gap-2 rounded-full border border-black/8 bg-white px-3 py-1.5 text-xs font-medium text-black/60"
@@ -4447,13 +4450,13 @@
 								</div>
 							{:else}
 								<div class="pt-4">
-									<div class="grid gap-3 sm:grid-cols-3">
+									<div class="grid grid-cols-3 gap-2 sm:gap-3">
 										<div
-											class="rounded-[24px] border border-black/6 bg-white px-4 py-4 shadow-[0_10px_28px_rgba(17,24,39,0.06)]"
+											class="rounded-[20px] border border-black/6 bg-white px-2.5 py-3 shadow-[0_8px_24px_rgba(17,24,39,0.05)] sm:rounded-[24px] sm:px-4 sm:py-4 sm:shadow-[0_10px_28px_rgba(17,24,39,0.06)]"
 										>
-											<div class="flex items-center gap-3">
+											<div class="flex flex-col items-center text-center">
 												<div
-													class="flex h-10 w-10 items-center justify-center rounded-[14px] bg-[#f4f4f2] text-[#141414]"
+													class="flex h-10 w-10 items-center justify-center rounded-[14px] bg-[#f4f4f2] text-[#141414] sm:h-10 sm:w-10 sm:rounded-[14px]"
 												>
 													<svg
 														viewBox="0 0 24 24"
@@ -4468,12 +4471,14 @@
 														<path d="m9.5 12 1.8 1.8 3.7-4.3" />
 													</svg>
 												</div>
-												<div>
-													<p class="text-[10px] tracking-[0.24em] text-[var(--muted)] uppercase">
+												<div class="mt-2">
+													<p
+														class="text-[8px] font-medium tracking-[0.2em] text-[var(--muted)] uppercase sm:text-[10px] sm:tracking-[0.24em]"
+													>
 														Trust
 													</p>
 													<p
-														class="mt-1 text-2xl font-semibold tracking-[-0.04em] text-[var(--text)]"
+														class="mt-1 text-[1.15rem] font-semibold tracking-[-0.03em] text-[var(--text)] sm:text-2xl"
 													>
 														{meQuery.data?.trustScore?.toFixed(1) ?? '2.0'}
 													</p>
@@ -4481,11 +4486,11 @@
 											</div>
 										</div>
 										<div
-											class="rounded-[24px] border border-black/6 bg-white px-4 py-4 shadow-[0_10px_28px_rgba(17,24,39,0.06)]"
+											class="rounded-[20px] border border-black/6 bg-white px-2.5 py-3 shadow-[0_8px_24px_rgba(17,24,39,0.05)] sm:rounded-[24px] sm:px-4 sm:py-4 sm:shadow-[0_10px_28px_rgba(17,24,39,0.06)]"
 										>
-											<div class="flex items-center gap-3">
+											<div class="flex flex-col items-center text-center">
 												<div
-													class="flex h-10 w-10 items-center justify-center rounded-[14px] bg-[#f4f4f2] text-[#141414]"
+													class="flex h-10 w-10 items-center justify-center rounded-[14px] bg-[#f4f4f2] text-[#141414] sm:h-10 sm:w-10 sm:rounded-[14px]"
 												>
 													<svg
 														viewBox="0 0 24 24"
@@ -4500,12 +4505,14 @@
 														<path d="M3 12h18" />
 													</svg>
 												</div>
-												<div>
-													<p class="text-[10px] tracking-[0.24em] text-[var(--muted)] uppercase">
+												<div class="mt-2">
+													<p
+														class="text-[8px] font-medium tracking-[0.18em] text-[var(--muted)] uppercase sm:text-[10px] sm:tracking-[0.24em]"
+													>
 														Reports
 													</p>
 													<p
-														class="mt-1 text-2xl font-semibold tracking-[-0.04em] text-[var(--text)]"
+														class="mt-1 text-[1.15rem] font-semibold tracking-[-0.03em] text-[var(--text)] sm:text-2xl"
 													>
 														{meQuery.data?.reportsCount ?? 0}
 													</p>
@@ -4513,11 +4520,11 @@
 											</div>
 										</div>
 										<div
-											class="rounded-[24px] border border-black/6 bg-white px-4 py-4 shadow-[0_10px_28px_rgba(17,24,39,0.06)]"
+											class="rounded-[20px] border border-black/6 bg-white px-2.5 py-3 shadow-[0_8px_24px_rgba(17,24,39,0.05)] sm:rounded-[24px] sm:px-4 sm:py-4 sm:shadow-[0_10px_28px_rgba(17,24,39,0.06)]"
 										>
-											<div class="flex items-center gap-3">
+											<div class="flex flex-col items-center text-center">
 												<div
-													class="flex h-10 w-10 items-center justify-center rounded-[14px] bg-[#f4f4f2] text-[#141414]"
+													class="flex h-10 w-10 items-center justify-center rounded-[14px] bg-[#f4f4f2] text-[#141414] sm:h-10 sm:w-10 sm:rounded-[14px]"
 												>
 													<svg
 														viewBox="0 0 24 24"
@@ -4531,12 +4538,14 @@
 														<path d="M5 13l4 4L19 7" />
 													</svg>
 												</div>
-												<div>
-													<p class="text-[10px] tracking-[0.24em] text-[var(--muted)] uppercase">
+												<div class="mt-2">
+													<p
+														class="text-[8px] font-medium tracking-[0.17em] text-[var(--muted)] uppercase sm:text-[10px] sm:tracking-[0.24em]"
+													>
 														Confirmed
 													</p>
 													<p
-														class="mt-1 text-2xl font-semibold tracking-[-0.04em] text-[var(--text)]"
+														class="mt-1 text-[1.15rem] font-semibold tracking-[-0.03em] text-[var(--text)] sm:text-2xl"
 													>
 														{meQuery.data?.confirmedCount ?? 0}
 													</p>
@@ -4546,18 +4555,18 @@
 									</div>
 
 									{#if drawerExpanded}
-										<div class="mt-4 space-y-3">
+										<div class="mt-3 space-y-2.5 sm:mt-4 sm:space-y-3">
 											<div
-												class="rounded-[24px] border border-black/6 bg-white px-4 py-4 shadow-[0_10px_28px_rgba(17,24,39,0.06)]"
+												class="rounded-[20px] border border-black/6 bg-white px-3.5 py-3.5 shadow-[0_8px_24px_rgba(17,24,39,0.05)] sm:rounded-[24px] sm:px-4 sm:py-4 sm:shadow-[0_10px_28px_rgba(17,24,39,0.06)]"
 											>
 												<div class="flex items-start justify-between gap-3">
-													<div class="flex items-center gap-2">
+													<div class="flex items-center gap-2.5">
 														<span
-															class="flex h-9 w-9 items-center justify-center rounded-[12px] bg-[#f4f4f2] text-[#141414]"
+															class="flex h-8 w-8 items-center justify-center rounded-[12px] bg-[#f4f4f2] text-[#141414] sm:h-9 sm:w-9"
 														>
 															<svg
 																viewBox="0 0 24 24"
-																class="h-4.5 w-4.5"
+																class="h-4 w-4 sm:h-4.5 sm:w-4.5"
 																fill="none"
 																stroke="currentColor"
 																stroke-width="2"
@@ -4571,10 +4580,14 @@
 															</svg>
 														</span>
 														<div>
-															<p class="text-sm font-semibold text-[var(--text)]">
+															<p
+																class="text-[0.96rem] leading-none font-semibold text-[var(--text)] sm:text-sm"
+															>
 																Route preferences
 															</p>
-															<p class="text-xs text-[var(--muted)]">Routing and comfort</p>
+															<p class="mt-1 hidden text-xs text-[var(--muted)] sm:block">
+																Routing and comfort
+															</p>
 														</div>
 													</div>
 													{#if routePreferencesSaving}
@@ -4586,14 +4599,14 @@
 													{/if}
 												</div>
 
-												<div class="mt-4 grid gap-3 sm:grid-cols-2">
+												<div class="mt-3 grid grid-cols-2 gap-2.5 sm:mt-4 sm:gap-3">
 													<label class="grid gap-1.5">
 														<span
-															class="inline-flex items-center gap-1.5 text-[11px] font-semibold tracking-[0.18em] text-[var(--muted)] uppercase"
+															class="inline-flex items-center gap-1 text-[10px] font-semibold tracking-[0.16em] text-[var(--muted)] uppercase sm:gap-1.5 sm:text-[11px] sm:tracking-[0.18em]"
 														>
 															<svg
 																viewBox="0 0 24 24"
-																class="h-3.5 w-3.5"
+																class="h-3 w-3 shrink-0 sm:h-3.5 sm:w-3.5"
 																fill="none"
 																stroke="currentColor"
 																stroke-width="2"
@@ -4603,10 +4616,10 @@
 																<circle cx="12" cy="12" r="8" />
 																<path d="M12 8v4l3 3" />
 															</svg>
-															Mode
+															Vehicle
 														</span>
 														<select
-															class="rounded-[16px] border border-black/8 bg-white px-3 py-2.5 text-sm text-[#141414] shadow-[0_6px_18px_rgba(17,24,39,0.04)]"
+															class="min-w-0 rounded-[14px] border border-black/8 bg-white px-3 py-2.5 text-sm text-[#141414] shadow-[0_6px_18px_rgba(17,24,39,0.04)] sm:rounded-[16px]"
 															value={routingPreferences.mode}
 															onchange={handleRoutingModeChange}
 															disabled={routePreferencesSaving}
@@ -4619,11 +4632,11 @@
 
 													<label class="grid gap-1.5">
 														<span
-															class="inline-flex items-center gap-1.5 text-[11px] font-semibold tracking-[0.18em] text-[var(--muted)] uppercase"
+															class="inline-flex items-center gap-1 text-[10px] font-semibold tracking-[0.16em] text-[var(--muted)] uppercase sm:gap-1.5 sm:text-[11px] sm:tracking-[0.18em]"
 														>
 															<svg
 																viewBox="0 0 24 24"
-																class="h-3.5 w-3.5"
+																class="h-3 w-3 shrink-0 sm:h-3.5 sm:w-3.5"
 																fill="none"
 																stroke="currentColor"
 																stroke-width="2"
@@ -4637,7 +4650,7 @@
 															Cost priority
 														</span>
 														<select
-															class="rounded-[16px] border border-black/8 bg-white px-3 py-2.5 text-sm text-[#141414] shadow-[0_6px_18px_rgba(17,24,39,0.04)]"
+															class="min-w-0 rounded-[14px] border border-black/8 bg-white px-3 py-2.5 text-sm text-[#141414] shadow-[0_6px_18px_rgba(17,24,39,0.04)] sm:rounded-[16px]"
 															value={routingPreferences.costPriority}
 															onchange={handleCostPriorityChange}
 															disabled={routePreferencesSaving}
@@ -4649,7 +4662,7 @@
 													</label>
 												</div>
 
-												<div class="mt-4 grid gap-2 sm:grid-cols-2">
+												<div class="mt-3 grid grid-cols-2 gap-2 sm:mt-4">
 													<button
 														type="button"
 														onclick={() =>
@@ -4657,7 +4670,7 @@
 																avoidHighways: !routingPreferences.avoidHighways
 															})}
 														disabled={routePreferencesSaving}
-														class={`flex items-center gap-2 rounded-[18px] border px-3 py-3 text-left text-sm font-semibold ${
+														class={`flex min-h-[54px] items-center gap-2 rounded-[16px] border px-3 py-2.5 text-left text-[13px] leading-tight font-semibold sm:min-h-[58px] sm:rounded-[18px] sm:py-3 sm:text-sm ${
 															routingPreferences.avoidHighways
 																? 'border-[#1e88f7] bg-[#eef6ff] text-[#141414] shadow-[0_10px_24px_rgba(30,136,247,0.12)]'
 																: 'border-black/8 bg-white text-black/62 shadow-[0_8px_24px_rgba(17,24,39,0.05)]'
@@ -4665,7 +4678,7 @@
 													>
 														<svg
 															viewBox="0 0 24 24"
-															class="h-4 w-4 shrink-0"
+															class="h-3.5 w-3.5 shrink-0 sm:h-4 sm:w-4"
 															fill="none"
 															stroke="currentColor"
 															stroke-width="2"
@@ -4684,7 +4697,7 @@
 																avoidUTurns: !routingPreferences.avoidUTurns
 															})}
 														disabled={routePreferencesSaving}
-														class={`flex items-center gap-2 rounded-[18px] border px-3 py-3 text-left text-sm font-semibold ${
+														class={`flex min-h-[54px] items-center gap-2 rounded-[16px] border px-3 py-2.5 text-left text-[13px] leading-tight font-semibold sm:min-h-[58px] sm:rounded-[18px] sm:py-3 sm:text-sm ${
 															routingPreferences.avoidUTurns
 																? 'border-[#1e88f7] bg-[#eef6ff] text-[#141414] shadow-[0_10px_24px_rgba(30,136,247,0.12)]'
 																: 'border-black/8 bg-white text-black/62 shadow-[0_8px_24px_rgba(17,24,39,0.05)]'
@@ -4692,7 +4705,7 @@
 													>
 														<svg
 															viewBox="0 0 24 24"
-															class="h-4 w-4 shrink-0"
+															class="h-3.5 w-3.5 shrink-0 sm:h-4 sm:w-4"
 															fill="none"
 															stroke="currentColor"
 															stroke-width="2"
@@ -4711,7 +4724,7 @@
 																preferWellLitStreets: !routingPreferences.preferWellLitStreets
 															})}
 														disabled={routePreferencesSaving}
-														class={`flex items-center gap-2 rounded-[18px] border px-3 py-3 text-left text-sm font-semibold ${
+														class={`flex min-h-[54px] items-center gap-2 rounded-[16px] border px-3 py-2.5 text-left text-[13px] leading-tight font-semibold sm:min-h-[58px] sm:rounded-[18px] sm:py-3 sm:text-sm ${
 															routingPreferences.preferWellLitStreets
 																? 'border-[#1e88f7] bg-[#eef6ff] text-[#141414] shadow-[0_10px_24px_rgba(30,136,247,0.12)]'
 																: 'border-black/8 bg-white text-black/62 shadow-[0_8px_24px_rgba(17,24,39,0.05)]'
@@ -4719,7 +4732,7 @@
 													>
 														<svg
 															viewBox="0 0 24 24"
-															class="h-4 w-4 shrink-0"
+															class="h-3.5 w-3.5 shrink-0 sm:h-4 sm:w-4"
 															fill="none"
 															stroke="currentColor"
 															stroke-width="2"
@@ -4745,7 +4758,7 @@
 																preferFewerTurns: !routingPreferences.preferFewerTurns
 															})}
 														disabled={routePreferencesSaving}
-														class={`flex items-center gap-2 rounded-[18px] border px-3 py-3 text-left text-sm font-semibold ${
+														class={`flex min-h-[54px] items-center gap-2 rounded-[16px] border px-3 py-2.5 text-left text-[13px] leading-tight font-semibold sm:min-h-[58px] sm:rounded-[18px] sm:py-3 sm:text-sm ${
 															routingPreferences.preferFewerTurns
 																? 'border-[#1e88f7] bg-[#eef6ff] text-[#141414] shadow-[0_10px_24px_rgba(30,136,247,0.12)]'
 																: 'border-black/8 bg-white text-black/62 shadow-[0_8px_24px_rgba(17,24,39,0.05)]'
@@ -4753,7 +4766,7 @@
 													>
 														<svg
 															viewBox="0 0 24 24"
-															class="h-4 w-4 shrink-0"
+															class="h-3.5 w-3.5 shrink-0 sm:h-4 sm:w-4"
 															fill="none"
 															stroke="currentColor"
 															stroke-width="2"

@@ -21,6 +21,9 @@ const routingPreferencesValidator = v.object({
 	preferFewerTurns: v.boolean(),
 	mode: v.union(
 		v.literal('car'),
+		v.literal('gas_car'),
+		v.literal('diesel_car'),
+		v.literal('electric_car'),
 		v.literal('scooter'),
 		v.literal('bike'),
 		v.literal('pedestrian'),

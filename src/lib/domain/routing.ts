@@ -1,4 +1,13 @@
-export const ROUTING_MODES = ['car', 'scooter', 'bike', 'pedestrian', 'heavy_vehicle'] as const;
+export const ROUTING_MODES = [
+	'gas_car',
+	'diesel_car',
+	'electric_car',
+	'scooter',
+	'bike',
+	'pedestrian',
+	'heavy_vehicle'
+] as const;
+export const LEGACY_ROUTING_MODES = ['car'] as const;
 
 export const ROUTING_COST_PRIORITIES = [
 	'balanced',
@@ -7,7 +16,9 @@ export const ROUTING_COST_PRIORITIES = [
 	'lowest_fuel'
 ] as const;
 
-export type RoutingMode = (typeof ROUTING_MODES)[number];
+export type SelectableRoutingMode = (typeof ROUTING_MODES)[number];
+export type LegacyRoutingMode = (typeof LEGACY_ROUTING_MODES)[number];
+export type RoutingMode = SelectableRoutingMode | LegacyRoutingMode;
 export type RoutingCostPriority = (typeof ROUTING_COST_PRIORITIES)[number];
 
 export interface RoutingPreferences {
@@ -28,9 +39,29 @@ export const DEFAULT_ROUTING_PREFERENCES: RoutingPreferences = {
 	costPriority: 'balanced'
 };
 
+export const normalizeRoutingMode = (
+	mode: RoutingMode | null | undefined
+): SelectableRoutingMode => {
+	switch (mode) {
+		case 'car':
+			return 'gas_car';
+		case 'gas_car':
+		case 'diesel_car':
+		case 'electric_car':
+		case 'scooter':
+		case 'bike':
+		case 'pedestrian':
+		case 'heavy_vehicle':
+			return mode;
+		default:
+			return 'scooter';
+	}
+};
+
 export const normalizeRoutingPreferences = (
 	value: Partial<RoutingPreferences> | null | undefined
 ): RoutingPreferences => ({
 	...DEFAULT_ROUTING_PREFERENCES,
-	...(value ?? {})
+	...(value ?? {}),
+	mode: normalizeRoutingMode(value?.mode)
 });

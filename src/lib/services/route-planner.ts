@@ -119,6 +119,9 @@ const getMapboxProfile = (mode: RoutingMode) => {
 			return 'cycling';
 		case 'pedestrian':
 			return 'walking';
+		case 'gas_car':
+		case 'diesel_car':
+		case 'electric_car':
 		case 'car':
 		case 'scooter':
 		case 'heavy_vehicle':
@@ -137,6 +140,9 @@ const getFallbackSpeedMetersPerSecond = (mode: RoutingMode) => {
 			return 5.5;
 		case 'scooter':
 			return 7.5;
+		case 'gas_car':
+		case 'diesel_car':
+		case 'electric_car':
 		case 'car':
 		default:
 			return 8.5;
@@ -298,6 +304,7 @@ const createDefaultTrafficSummary = (mode: RoutingMode) => {
 	if (mode === 'bike') return 'Cycling profile prioritized';
 	if (mode === 'pedestrian') return 'Walking access prioritized';
 	if (mode === 'heavy_vehicle') return 'Heavy vehicle route preset';
+	if (mode === 'electric_car') return 'Electric vehicle profile prioritized';
 	return 'Traffic is moving well';
 };
 
@@ -358,7 +365,13 @@ const makeFallbackRoutes = (
 				maneuverModifier: index === 2 ? 'right' : undefined
 			}
 		];
-		const trafficEnabled = mode === 'car' || mode === 'scooter' || mode === 'heavy_vehicle';
+		const trafficEnabled =
+			mode === 'car' ||
+			mode === 'gas_car' ||
+			mode === 'diesel_car' ||
+			mode === 'electric_car' ||
+			mode === 'scooter' ||
+			mode === 'heavy_vehicle';
 
 		return {
 			...candidate,
@@ -403,7 +416,13 @@ const normalizeRoutes = (
 			firstLeg?.steps?.[0];
 		const modifier = normalizeModifier(cueStep?.maneuver?.modifier, cueStep?.maneuver?.type);
 		const roadName = cueStep?.name?.trim() || 'current road';
-		const trafficEnabled = mode === 'car' || mode === 'scooter' || mode === 'heavy_vehicle';
+		const trafficEnabled =
+			mode === 'car' ||
+			mode === 'gas_car' ||
+			mode === 'diesel_car' ||
+			mode === 'electric_car' ||
+			mode === 'scooter' ||
+			mode === 'heavy_vehicle';
 
 		return {
 			providerRouteId: `${route.weight_name ?? 'mapbox'}-${index + 1}`,
@@ -447,6 +466,9 @@ const fetchDirectionsFromMapbox = async ({
 		const profile = getMapboxProfile(preferences.mode);
 		const trafficEnabled =
 			preferences.mode === 'car' ||
+			preferences.mode === 'gas_car' ||
+			preferences.mode === 'diesel_car' ||
+			preferences.mode === 'electric_car' ||
 			preferences.mode === 'scooter' ||
 			preferences.mode === 'heavy_vehicle';
 

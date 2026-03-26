@@ -20,6 +20,9 @@ const userRoleValidator = v.union(v.literal('citizen'), v.literal('campus_rep'))
 const universityIdValidator = v.union(v.literal('rupp'), v.literal('itc'), v.literal('num'));
 const routingModeValidator = v.union(
 	v.literal('car'),
+	v.literal('gas_car'),
+	v.literal('diesel_car'),
+	v.literal('electric_car'),
 	v.literal('scooter'),
 	v.literal('bike'),
 	v.literal('pedestrian'),
