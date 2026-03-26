@@ -742,9 +742,9 @@
 					'line-join': 'round'
 				},
 				paint: {
-					'line-color': activeRouteStyle === 'navigation' ? '#d6e4ff' : '#ffffff',
-					'line-width': activeRouteStyle === 'navigation' ? 12 : 10,
-					'line-opacity': activeRouteStyle === 'navigation' ? 0.92 : 0.8
+					'line-color': activeRouteStyle === 'navigation' ? '#e8defd' : '#ffffff',
+					'line-width': activeRouteStyle === 'navigation' ? 13 : 10,
+					'line-opacity': activeRouteStyle === 'navigation' ? 0.96 : 0.8
 				}
 			});
 		}
@@ -762,7 +762,7 @@
 				paint: {
 					'line-color':
 						activeRouteStyle === 'navigation'
-							? '#2f7bff'
+							? '#6d28d9'
 							: [
 									'match',
 									['get', 'level'],
@@ -792,8 +792,8 @@
 					'line-join': 'round'
 				},
 				paint: {
-					'line-color': '#d6e4ff',
-					'line-width': 13,
+					'line-color': '#e8defd',
+					'line-width': 14,
 					'line-opacity': 0.98
 				}
 			});
@@ -809,8 +809,8 @@
 					'line-join': 'round'
 				},
 				paint: {
-					'line-color': '#1f6dff',
-					'line-width': 8.5,
+					'line-color': '#6d28d9',
+					'line-width': 9,
 					'line-opacity': 0.99
 				}
 			});

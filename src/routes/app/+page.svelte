@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { onDestroy, untrack } from 'svelte';
@@ -40,6 +41,7 @@
 	type DockHref = '/app?tab=pulse' | '/app?tab=route' | '/app?tab=account';
 	type TripSyncMode = 'remote' | 'local';
 	type ReportSheetState = 'collapsed' | 'half' | 'full';
+	type MobileRouteSheetState = 'peek' | 'full';
 	type RouteResponse = RankedClientRouteResult;
 	type StoredRouteOption = {
 		routeId: string;
@@ -251,26 +253,6 @@
 		if (snapshot?.willRainSoon) return 'watch';
 		return 'clear';
 	};
-	const buildGoogleMapsDirectionsHref = (
-		destination: GeoPoint,
-		origin?: GeoPoint | null,
-		mode: RoutingMode = routingPreferences.mode
-	) => {
-		const url = new URL('https://www.google.com/maps/dir/');
-		url.searchParams.set('api', '1');
-		url.searchParams.set('destination', `${destination.lat},${destination.lng}`);
-
-		if (origin) {
-			url.searchParams.set('origin', `${origin.lat},${origin.lng}`);
-		}
-
-		url.searchParams.set(
-			'travelmode',
-			mode === 'pedestrian' ? 'walking' : mode === 'bike' ? 'bicycling' : 'driving'
-		);
-
-		return url.toString();
-	};
 	const createRouteDestination = (
 		point: GeoPoint,
 		override?: Pick<RouteDestinationState, 'label' | 'detail' | 'presetId'>
@@ -411,6 +393,9 @@
 	let weatherError = $state<string | null>(null);
 	let weatherRequestId = $state(0);
 	let pendingRouteRequestCount = 0;
+	let mobileRouteSheetState = $state<MobileRouteSheetState>('peek');
+	let mobileRouteSheetPointerStartY = 0;
+	let mobileRouteSheetPointerStartState: MobileRouteSheetState = 'peek';
 
 	const activeTab = $derived.by((): AppTab => {
 		const tab = page.url.searchParams.get('tab');
@@ -448,6 +433,27 @@
 	const nextArrivalLabel = $derived(
 		navigationRoute ? formatArrivalTime(navigationRoute.arrivalTime) : '--:--'
 	);
+	const routePanelOriginLabel = $derived(currentLocation ? 'Your location' : 'Locating...');
+	const routePanelOriginDetail = $derived(
+		currentLocation
+			? `${currentLocation.lat.toFixed(4)}, ${currentLocation.lng.toFixed(4)}`
+			: 'Waiting for live GPS fix'
+	);
+	const mobileRouteSheetPreviewLabel = $derived.by(() => {
+		if (tripStatus === 'tracking' && navigationRoute) {
+			return `Live • ${nextArrivalLabel}`;
+		}
+
+		if (selectedRoute) {
+			return `${formatMinutes(selectedRoute.durationSec)} • Arrive ${nextArrivalLabel}`;
+		}
+
+		if (searchLoading) {
+			return 'Searching destinations...';
+		}
+
+		return 'Choose a destination';
+	});
 	const currentCueModifier = $derived(navigationRoute?.navigationCue.modifier ?? 'straight');
 	const navigationInstruction = $derived(
 		navigationRoute?.navigationCue.instruction ?? 'Trip is live. Follow the highlighted path.'
@@ -578,16 +584,8 @@
 			Boolean(tripError) ||
 			tripStatus !== 'idle'
 	);
-	const routeSearchVisible = $derived(activeTab === 'route' && !hasRouteContext);
-	const destinationDirectionsHref = $derived.by(() =>
-		currentRouteDestination
-			? buildGoogleMapsDirectionsHref(
-					currentRouteDestination,
-					currentLocation,
-					routingPreferences.mode
-				)
-			: null
-	);
+	const routeSearchActive = $derived(activeTab === 'route' && tripStatus !== 'tracking');
+	const routeSearchVisible = $derived(routeSearchActive);
 	const preferenceSummary = $derived.by(() => {
 		const chips = [
 			getRoutingModeLabel(routingPreferences.mode),
@@ -1147,7 +1145,7 @@
 		if (!nextDestination) return;
 
 		searchQuery = nextDestination.label;
-		searchLockedQuery = null;
+		searchLockedQuery = nextDestination.label;
 		searchResults = [];
 		searchError = null;
 
@@ -1168,6 +1166,40 @@
 		searchError = null;
 
 		void planRoute(nextDestination);
+	};
+
+	const handleTabNavigation = async (href: DockHref) => {
+		await goto(resolve(href));
+	};
+
+	const setMobileRouteSheetState = (nextState: MobileRouteSheetState) => {
+		mobileRouteSheetState = nextState;
+	};
+
+	const handleMobileRouteSheetPointerDown = (event: PointerEvent) => {
+		mobileRouteSheetPointerStartY = event.clientY;
+		mobileRouteSheetPointerStartState = mobileRouteSheetState;
+	};
+
+	const handleMobileRouteSheetPointerUp = (event: PointerEvent) => {
+		const deltaY = event.clientY - mobileRouteSheetPointerStartY;
+
+		if (Math.abs(deltaY) < 12) {
+			mobileRouteSheetState = mobileRouteSheetState === 'peek' ? 'full' : 'peek';
+			return;
+		}
+
+		if (deltaY < -24) {
+			mobileRouteSheetState = 'full';
+			return;
+		}
+
+		if (deltaY > 24) {
+			mobileRouteSheetState = 'peek';
+			return;
+		}
+
+		mobileRouteSheetState = mobileRouteSheetPointerStartState;
 	};
 
 	$effect(() => {
@@ -1221,7 +1253,7 @@
 	});
 
 	$effect(() => {
-		if (!routeSearchVisible) {
+		if (!routeSearchActive) {
 			untrack(() => {
 				const shouldResetSearchState =
 					searchResults.length > 0 || searchLoading || searchError !== null;
@@ -1317,6 +1349,22 @@
 	$effect(() => {
 		if (activeTab === 'account' && !accountDrawerExpanded) {
 			accountDrawerExpanded = true;
+		}
+	});
+
+	$effect(() => {
+		if (activeTab !== 'route') {
+			mobileRouteSheetState = 'peek';
+			return;
+		}
+
+		if (tripStatus === 'tracking') {
+			mobileRouteSheetState = 'peek';
+			return;
+		}
+
+		if (searchLoading || searchResults.length > 0 || routeError) {
+			mobileRouteSheetState = 'full';
 		}
 	});
 
@@ -1486,7 +1534,7 @@
 								</button>
 							</form>
 
-							{#if searchLoading || searchResults.length > 0 || searchError || destinationDirectionsHref}
+							{#if searchLoading || searchResults.length > 0 || searchError}
 								<div class="border-t border-[var(--border)] px-3 py-3">
 									{#if searchLoading}
 										<div
@@ -1527,29 +1575,6 @@
 											{searchError}
 										</div>
 									{/if}
-
-									{#if destinationDirectionsHref}
-										<div
-											class="mt-2 flex items-center justify-between gap-3 rounded-[20px] bg-[var(--surface-muted)] px-4 py-3"
-										>
-											<div class="min-w-0">
-												<p class="truncate text-sm font-medium text-[var(--text)]">
-													{currentRouteDestinationLabel}
-												</p>
-												<p class="mt-1 truncate text-xs text-[var(--muted)]">
-													{currentRouteDestinationDetail}
-												</p>
-											</div>
-											<button
-												type="button"
-												onclick={() =>
-													window.open(destinationDirectionsHref, '_blank', 'noopener,noreferrer')}
-												class="shrink-0 rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-xs font-semibold text-[var(--muted)] hover:bg-[var(--primary-soft)]"
-											>
-												Open in Maps
-											</button>
-										</div>
-									{/if}
 								</div>
 							{/if}
 						</div>
@@ -1558,7 +1583,619 @@
 			</div>
 		{/if}
 
-		{#if activeTab === 'route' && showRouteHud}
+		{#if activeTab === 'route'}
+			<div class="pointer-events-none absolute inset-0 z-26">
+				<div class="hidden h-full p-4 sm:block">
+					<aside
+						class="pointer-events-auto flex h-full w-[min(410px,calc(100vw-2rem))] flex-col overflow-hidden rounded-[26px] border border-black/10 bg-white text-[#202124] shadow-[0_22px_56px_rgba(32,33,36,0.18)]"
+					>
+						<div class="border-b border-[#e5e7eb] px-7 py-5">
+							<div class="flex items-center gap-5">
+								<button
+									type="button"
+									onclick={clearRoutePlan}
+									class="flex h-12 w-12 items-center justify-center rounded-full text-[#3c4043] transition hover:bg-[#f1f3f4]"
+									aria-label="Clear route planner"
+								>
+									<svg
+										viewBox="0 0 24 24"
+										class="h-7 w-7"
+										fill="none"
+										stroke="currentColor"
+										stroke-width="2.2"
+										stroke-linecap="round"
+										stroke-linejoin="round"
+									>
+										<path d="M4 7h16" />
+										<path d="M4 12h16" />
+										<path d="M4 17h16" />
+									</svg>
+								</button>
+								<h2
+									class="text-[1.35rem] leading-none font-semibold tracking-[-0.03em] text-[#202124]"
+								>
+									Driving directions
+								</h2>
+							</div>
+
+							<div class="mt-6 flex items-start gap-4">
+								<div class="flex shrink-0 flex-col items-center pt-2">
+									<span
+										class="flex h-7 w-7 items-center justify-center rounded-full border-[3px] border-[#1a73e8] bg-white"
+									>
+										<span class="h-2.5 w-2.5 rounded-full bg-[#1a73e8]"></span>
+									</span>
+									<span class="my-2 h-9 w-[3px] rounded-full bg-[#cbd5e1]"></span>
+									<span
+										class="relative flex h-7 w-7 items-center justify-center rounded-full bg-[#ea4335]"
+									>
+										<span class="h-2.5 w-2.5 rounded-full bg-white"></span>
+										<span class="absolute top-[22px] h-3.5 w-2.5 rounded-b-full bg-[#ea4335]"
+										></span>
+									</span>
+								</div>
+
+								<div class="min-w-0 flex-1 space-y-4">
+									<div class="rounded-[14px] bg-[#f1f3f4] px-5 py-3.5">
+										<p class="truncate text-[0.85rem] font-medium text-[#202124]">
+											{routePanelOriginLabel}
+										</p>
+										<p class="mt-1 truncate text-[0.72rem] text-[#5f6368]">
+											{routePanelOriginDetail}
+										</p>
+									</div>
+
+									<form
+										class="rounded-[14px] bg-[#f1f3f4] px-5 py-3.5"
+										onsubmit={(event) => {
+											event.preventDefault();
+											void submitPlaceSearch();
+										}}
+									>
+										<input
+											type="text"
+											value={searchQuery}
+											oninput={handleSearchInput}
+											onkeydown={handleSearchKeydown}
+											placeholder="Choose destination"
+											autocomplete="off"
+											spellcheck="false"
+											class="w-full bg-transparent text-[0.85rem] font-medium text-[#202124] placeholder:text-[#5f6368] focus:outline-none"
+										/>
+										<p class="mt-1 truncate text-[0.72rem] text-[#5f6368]">
+											{routeDestination
+												? currentRouteDestinationDetail
+												: 'Place, address, or campus'}
+										</p>
+									</form>
+								</div>
+
+								<div class="flex shrink-0 flex-col items-center gap-2 pt-3 text-[#5f6368]">
+									<button
+										type="button"
+										onclick={() => void planRoute()}
+										disabled={!routeDestination || routeLoading}
+										class="flex h-10 w-10 items-center justify-center rounded-full transition hover:bg-[#f1f3f4] disabled:opacity-40"
+										aria-label="Refresh routes"
+									>
+										<svg
+											viewBox="0 0 24 24"
+											class="h-5 w-5"
+											fill="none"
+											stroke="currentColor"
+											stroke-width="2.2"
+											stroke-linecap="round"
+											stroke-linejoin="round"
+										>
+											<path d="M12 5v14" />
+											<path d="m7 10 5-5 5 5" />
+										</svg>
+									</button>
+									<button
+										type="button"
+										onclick={clearRoutePlan}
+										class="flex h-10 w-10 items-center justify-center rounded-full transition hover:bg-[#f1f3f4]"
+										aria-label="Clear route"
+									>
+										<svg
+											viewBox="0 0 24 24"
+											class="h-5 w-5"
+											fill="none"
+											stroke="currentColor"
+											stroke-width="2.2"
+											stroke-linecap="round"
+											stroke-linejoin="round"
+										>
+											<path d="M12 19V5" />
+											<path d="m7 14 5 5 5-5" />
+										</svg>
+									</button>
+								</div>
+							</div>
+
+							<div
+								class="mt-4 flex items-center justify-between gap-3 border-t border-[#e5e7eb] pt-4"
+							>
+								<div class="flex items-center gap-3 text-[#3c4043]">
+									<svg
+										viewBox="0 0 24 24"
+										class="h-7 w-7"
+										fill="none"
+										stroke="currentColor"
+										stroke-width="2.2"
+										stroke-linecap="round"
+										stroke-linejoin="round"
+									>
+										<circle cx="12" cy="12" r="9" />
+										<path d="M12 7v5l3 3" />
+									</svg>
+									<span class="text-[0.8rem] font-medium">Leave now</span>
+								</div>
+								<div class="flex items-center gap-2">
+									{#if navigationRoute}
+										<span
+											class={`rounded-full px-3 py-1.5 text-[11px] font-semibold ${getTrafficBadgeClass(navigationRoute.trafficLevel)}`}
+										>
+											{getTrafficLabel(navigationRoute.trafficLevel)}
+										</span>
+									{/if}
+									{#if selectedRoute}
+										<span class="text-[0.75rem] text-[#5f6368]">
+											{formatMinutes(selectedRoute.durationSec)} • {nextArrivalLabel}
+										</span>
+									{/if}
+								</div>
+								{#if tripStatus === 'tracking'}
+									<button
+										type="button"
+										onclick={markArrived}
+										disabled={tripBusy !== null}
+										class="rounded-full bg-[#1a73e8] px-8 py-3 text-[0.95rem] font-semibold text-white shadow-[0_12px_24px_rgba(26,115,232,0.28)] disabled:opacity-50"
+									>
+										{tripBusy === 'arriving' ? 'Saving...' : 'Arrived'}
+									</button>
+								{:else}
+									<button
+										type="button"
+										onclick={beginTrip}
+										disabled={!selectedRoute || tripBusy !== null}
+										class="rounded-full bg-[#1a73e8] px-8 py-3 text-[0.95rem] font-semibold text-white shadow-[0_12px_24px_rgba(26,115,232,0.28)] disabled:opacity-50"
+									>
+										{tripBusy === 'starting' ? 'Starting...' : 'Start trip'}
+									</button>
+								{/if}
+							</div>
+						</div>
+
+						<div class="min-h-0 flex-1 overflow-hidden bg-[#f8f9fa]">
+							<div class="border-b border-[#e5e7eb] bg-white px-7 py-4">
+								<div class="flex items-center justify-between gap-3">
+									<p class="text-[0.85rem] font-medium text-[#3c4043]">Routes</p>
+									{#if routeOptions.length > 0}
+										<p class="text-[0.75rem] text-[#5f6368]">
+											{routeOptions.length} option{routeOptions.length === 1 ? '' : 's'}
+										</p>
+									{/if}
+								</div>
+							</div>
+
+							<div class="space-y-3 px-2 py-3">
+								{#if routeError}
+									<div class="px-4">
+										<div
+											class="rounded-[18px] border border-[#f6c7c1] bg-[#fef1ef] px-4 py-3 text-sm text-[#b3261e]"
+										>
+											{routeError}
+										</div>
+									</div>
+								{/if}
+
+								{#if tripError}
+									<div class="px-4">
+										<div
+											class="rounded-[18px] border border-[#f6c7c1] bg-[#fef1ef] px-4 py-3 text-sm text-[#b3261e]"
+										>
+											{tripError}
+										</div>
+									</div>
+								{/if}
+
+								{#if tripMessage}
+									<div class="px-4">
+										<div
+											class="rounded-[18px] border border-[#c7dafc] bg-[#eef4ff] px-4 py-3 text-sm text-[#174ea6]"
+										>
+											{tripMessage}
+										</div>
+									</div>
+								{/if}
+
+								{#if searchLoading || searchResults.length > 0 || searchError}
+									<div class="space-y-2 px-4">
+										{#if searchLoading}
+											<div
+												class="rounded-[18px] bg-white px-4 py-3 text-sm text-[#5f6368] shadow-[0_1px_3px_rgba(32,33,36,0.1)]"
+											>
+												Searching nearby places...
+											</div>
+										{:else if searchError}
+											<div
+												class="rounded-[18px] border border-[#f6c7c1] bg-[#fef1ef] px-4 py-3 text-sm text-[#b3261e]"
+											>
+												{searchError}
+											</div>
+										{:else}
+											{#each searchResults as result (result.id)}
+												<button
+													type="button"
+													onclick={() => selectSearchResult(result)}
+													class="block w-full rounded-[18px] bg-white px-4 py-3 text-left shadow-[0_1px_3px_rgba(32,33,36,0.1)] transition hover:bg-[#f8fbff]"
+												>
+													<p class="truncate text-[0.98rem] font-medium text-[#202124]">
+														{result.label}
+													</p>
+													<p class="mt-1 line-clamp-2 text-sm text-[#5f6368]">
+														{result.detail}
+													</p>
+												</button>
+											{/each}
+										{/if}
+									</div>
+								{/if}
+
+								{#if routeLoading}
+									<div class="px-4">
+										<div
+											class="rounded-[22px] bg-white px-5 py-4 text-sm text-[#5f6368] shadow-[0_1px_3px_rgba(32,33,36,0.1)]"
+										>
+											Loading traffic-aware routes for {routeDestination?.label ??
+												'your destination'}.
+										</div>
+									</div>
+								{:else if routeOptions.length === 0}
+									<div class="px-4">
+										<div
+											class="rounded-[22px] bg-white px-5 py-4 text-sm text-[#5f6368] shadow-[0_1px_3px_rgba(32,33,36,0.1)]"
+										>
+											Search for a destination to compare route options.
+										</div>
+									</div>
+								{:else}
+									<div class="space-y-3 overflow-y-auto px-2 pb-3">
+										{#each routeOptions.slice(0, 3) as route, index (route.routeId)}
+											<button
+												type="button"
+												onclick={() => selectRoute(route.routeId)}
+												class={`mx-4 block rounded-[20px] border-l-[5px] bg-white px-5 py-4 text-left shadow-[0_1px_3px_rgba(32,33,36,0.1)] transition ${
+													selectedRouteId === route.routeId
+														? 'border-l-[#1a73e8] ring-2 ring-[#1a73e8]/10'
+														: 'border-l-transparent hover:bg-[#fbfdff]'
+												}`}
+											>
+												<div class="flex items-start gap-4">
+													<div
+														class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#1a73e8] text-sm font-semibold text-white"
+													>
+														{index + 1}
+													</div>
+													<div class="min-w-0 flex-1">
+														<div class="flex items-center gap-3">
+															<p
+																class="text-[1.25rem] leading-none font-semibold tracking-[-0.04em] text-[#202124]"
+															>
+																{formatMinutes(route.durationSec)}
+															</p>
+															<p class="text-[0.85rem] font-medium text-[#202124]">
+																Arrive at {formatArrivalTime(route.arrivalTime)}
+															</p>
+															{#if index === 0}
+																<span
+																	class="rounded-[8px] bg-[#1a73e8] px-2.5 py-1 text-[11px] font-semibold text-white"
+																>
+																	BEST
+																</span>
+															{/if}
+														</div>
+														<p class="mt-2 text-[0.82rem] leading-6 text-[#3c4043]">
+															{route.label}; {route.trafficSummary}
+														</p>
+														<p class="mt-1 text-[0.78rem] text-[#5f6368]">
+															{formatDistance(route.distanceMeters)} KM
+														</p>
+													</div>
+												</div>
+											</button>
+										{/each}
+									</div>
+								{/if}
+							</div>
+						</div>
+					</aside>
+				</div>
+
+				<div class="sm:hidden">
+					<div class="pointer-events-none absolute inset-x-0 bottom-[86px] px-3">
+						<div
+							class="pointer-events-auto overflow-hidden rounded-[28px] border border-black/8 bg-[var(--surface)] text-[var(--text)] shadow-[var(--shadow-float)]"
+						>
+							<div class="px-4 pt-2.5 pb-2.5">
+								<button
+									type="button"
+									onpointerdown={handleMobileRouteSheetPointerDown}
+									onpointerup={handleMobileRouteSheetPointerUp}
+									class="mx-auto flex w-20 items-center justify-center py-1"
+									aria-label={mobileRouteSheetState === 'peek'
+										? 'Expand route sheet'
+										: 'Collapse route sheet'}
+								>
+									<span class="h-1 w-12 rounded-full bg-[#d7dce1]"></span>
+								</button>
+
+								<div class="mt-2 flex items-center justify-between gap-2">
+									<div class="min-w-0">
+										<p class="truncate text-[0.82rem] font-semibold text-[var(--text)]">
+											{currentRouteDestinationLabel}
+										</p>
+										<p class="mt-0.5 text-[0.66rem] text-[var(--muted)]">
+											{mobileRouteSheetPreviewLabel}
+										</p>
+									</div>
+									<div class="flex shrink-0 items-center gap-1">
+										{#if navigationRoute}
+											<span
+												class={`rounded-full px-2 py-1 text-[9px] font-semibold ${getTrafficBadgeClass(navigationRoute.trafficLevel)}`}
+											>
+												{getTrafficLabel(navigationRoute.trafficLevel)}
+											</span>
+										{/if}
+									</div>
+								</div>
+
+								{#if mobileRouteSheetState === 'full'}
+									<form
+										class="mt-2.5 rounded-[22px] bg-[#f3f4f6] px-3 py-2.5"
+										onsubmit={(event) => {
+											event.preventDefault();
+											void submitPlaceSearch();
+										}}
+									>
+										<div class="flex items-start gap-2.5">
+											<div class="mt-0.5 flex shrink-0 flex-col items-center">
+												<span class="h-2 w-2 rounded-full bg-[#1a73e8]"></span>
+												<span class="my-1 h-4 w-[2px] rounded-full bg-[#cbd5e1]"></span>
+												<span class="h-2 w-2 rounded-full bg-[#ea4335]"></span>
+											</div>
+											<div class="min-w-0 flex-1 space-y-2">
+												<div>
+													<p class="truncate text-[0.74rem] font-medium text-[var(--text)]">
+														{routePanelOriginLabel}
+													</p>
+													<p class="mt-0.5 truncate text-[0.62rem] text-[var(--muted)]">
+														{routePanelOriginDetail}
+													</p>
+												</div>
+												<div class="h-px bg-[#d9dde3]"></div>
+												<div>
+													<input
+														type="text"
+														value={searchQuery}
+														oninput={handleSearchInput}
+														onkeydown={handleSearchKeydown}
+														placeholder="Choose destination"
+														autocomplete="off"
+														spellcheck="false"
+														class="w-full bg-transparent text-[0.74rem] font-medium text-[var(--text)] placeholder:text-[var(--muted)] focus:outline-none"
+													/>
+													<p class="mt-0.5 truncate text-[0.62rem] text-[var(--muted)]">
+														{routeDestination
+															? currentRouteDestinationDetail
+															: 'Place, address, or campus'}
+													</p>
+												</div>
+											</div>
+										</div>
+									</form>
+
+									<div class="mt-2.5 flex items-center justify-between gap-2">
+										<div class="flex min-w-0 items-center gap-2">
+											<span
+												class="rounded-full bg-[#f3f4f6] px-2.5 py-1 text-[0.68rem] font-medium text-[var(--muted)]"
+											>
+												Leave now
+											</span>
+											{#if selectedRoute}
+												<span class="truncate text-[0.7rem] text-[var(--muted)]">
+													{formatDistance(selectedRoute.distanceMeters)} • {nextArrivalLabel}
+												</span>
+											{/if}
+										</div>
+										<button
+											type="button"
+											onclick={() => void planRoute()}
+											disabled={!routeDestination || routeLoading}
+											class="rounded-[18px] border border-black/8 bg-white px-3 py-1.5 text-[0.68rem] font-medium text-[var(--muted)] disabled:opacity-40"
+										>
+											Refresh
+										</button>
+									</div>
+								{:else}
+									<div class="mt-2.5 grid grid-cols-2 gap-2">
+										{#if tripStatus === 'tracking'}
+											<button
+												type="button"
+												onclick={() => setMobileRouteSheetState('full')}
+												class="rounded-[22px] border border-black/8 bg-white px-4 py-2.5 text-[0.82rem] font-semibold text-[var(--muted)]"
+											>
+												Report
+											</button>
+											<button
+												type="button"
+												onclick={markArrived}
+												disabled={tripBusy !== null}
+												class="rounded-[16px] bg-[#1a73e8] px-4 py-2.5 text-[0.82rem] font-semibold text-white disabled:opacity-50"
+											>
+												{tripBusy === 'arriving' ? 'Saving...' : 'Arrived'}
+											</button>
+										{:else}
+											<button
+												type="button"
+												onclick={beginTrip}
+												disabled={!selectedRoute || tripBusy !== null}
+												class="rounded-[16px] bg-[#1a73e8] px-4 py-2.5 text-[0.82rem] font-semibold text-white disabled:opacity-50"
+											>
+												{tripBusy === 'starting' ? 'Starting...' : 'Start trip'}
+											</button>
+											<button
+												type="button"
+												onclick={() => setMobileRouteSheetState('full')}
+												class="rounded-[22px] border border-black/8 bg-white px-4 py-2.5 text-[0.82rem] font-semibold text-[var(--muted)]"
+											>
+												Details
+											</button>
+										{/if}
+									</div>
+								{/if}
+							</div>
+
+							{#if mobileRouteSheetState === 'full'}
+								<div class="border-t border-black/8 bg-[#f8f9fa] px-3 pt-2.5 pb-2.5">
+									{#if searchLoading || searchResults.length > 0 || searchError}
+										<div class="mb-2.5 space-y-2">
+											{#if searchLoading}
+												<div
+													class="rounded-[22px] bg-white px-3.5 py-3 text-[0.72rem] text-[var(--muted)]"
+												>
+													Searching nearby places...
+												</div>
+											{:else if searchError}
+												<div
+													class="rounded-[22px] border border-[#f6c7c1] bg-[#fef1ef] px-3.5 py-3 text-[0.72rem] text-[#b3261e]"
+												>
+													{searchError}
+												</div>
+											{:else}
+												{#each searchResults.slice(0, 3) as result (result.id)}
+													<button
+														type="button"
+														onclick={() => selectSearchResult(result)}
+														class="block w-full rounded-[22px] bg-white px-3.5 py-3 text-left"
+													>
+														<p class="truncate text-[0.78rem] font-medium text-[var(--text)]">
+															{result.label}
+														</p>
+														<p class="mt-1 line-clamp-2 text-[0.68rem] text-[var(--muted)]">
+															{result.detail}
+														</p>
+													</button>
+												{/each}
+											{/if}
+										</div>
+									{/if}
+
+									{#if routeError}
+										<div
+											class="mb-2.5 rounded-[22px] border border-[#f6c7c1] bg-[#fef1ef] px-3.5 py-3 text-[0.72rem] text-[#b3261e]"
+										>
+											{routeError}
+										</div>
+									{/if}
+
+									{#if routeLoading}
+										<div
+											class="rounded-[22px] bg-white px-3.5 py-3 text-[0.72rem] text-[var(--muted)]"
+										>
+											Loading traffic-aware routes...
+										</div>
+									{:else if routeOptions.length === 0}
+										<div
+											class="rounded-[22px] bg-white px-3.5 py-3 text-[0.72rem] text-[var(--muted)]"
+										>
+											Search for a destination to compare route options.
+										</div>
+									{:else}
+										<div class="space-y-2">
+											{#each routeOptions.slice(0, 1) as route, index (route.routeId)}
+												<button
+													type="button"
+													onclick={() => selectRoute(route.routeId)}
+													class={`block w-full rounded-[18px] border bg-white px-3 py-2.5 text-left ${
+														selectedRouteId === route.routeId
+															? 'border-[#9ac5ff] shadow-[0_0_0_2px_rgba(26,115,232,0.08)]'
+															: 'border-transparent'
+													}`}
+												>
+													<div class="flex items-start justify-between gap-3">
+														<div class="min-w-0">
+															<div class="flex items-center gap-2">
+																<div
+																	class="flex h-6.5 w-6.5 items-center justify-center rounded-full bg-[#1a73e8] text-[0.68rem] font-semibold text-white"
+																>
+																	{index + 1}
+																</div>
+																<p
+																	class="text-[0.9rem] font-semibold tracking-[-0.03em] text-[var(--text)]"
+																>
+																	{formatMinutes(route.durationSec)}
+																</p>
+																{#if index === 0}
+																	<span
+																		class="rounded-[7px] bg-[#1a73e8] px-2 py-0.5 text-[9px] font-semibold text-white"
+																	>
+																		BEST
+																	</span>
+																{/if}
+															</div>
+															<p
+																class="mt-1.5 truncate text-[0.7rem] font-medium text-[var(--text)]"
+															>
+																{route.label}
+															</p>
+															<p class="mt-0.5 text-[0.62rem] text-[var(--muted)]">
+																Arrive {formatArrivalTime(route.arrivalTime)} • {formatDistance(
+																	route.distanceMeters
+																)}
+															</p>
+														</div>
+														{#if selectedRouteId === route.routeId}
+															<span
+																class="rounded-full bg-[#eef4ff] px-2 py-1 text-[9px] font-semibold text-[#1a73e8]"
+															>
+																Selected
+															</span>
+														{/if}
+													</div>
+												</button>
+											{/each}
+										</div>
+									{/if}
+
+									<div class="mt-2.5 grid grid-cols-2 gap-2">
+										<button
+											type="button"
+											onclick={beginTrip}
+											disabled={!selectedRoute || tripBusy !== null}
+											class="rounded-[16px] bg-[#1a73e8] px-4 py-2.5 text-[0.82rem] font-semibold text-white disabled:opacity-50"
+										>
+											{tripBusy === 'starting' ? 'Starting...' : 'Start trip'}
+										</button>
+										<button
+											type="button"
+											onclick={markArrived}
+											disabled={tripStatus !== 'tracking' || tripBusy !== null}
+											class="rounded-[22px] border border-black/8 bg-white px-4 py-2.5 text-[0.82rem] font-semibold text-[var(--muted)] disabled:opacity-50"
+										>
+											{tripBusy === 'arriving' ? 'Saving...' : 'Arrived'}
+										</button>
+									</div>
+								</div>
+							{/if}
+						</div>
+					</div>
+				</div>
+			</div>
+		{/if}
+
+		{#if activeTab === 'route' && showRouteHud && false}
 			<div
 				class={`pointer-events-none absolute inset-x-0 z-25 px-2 sm:px-2 ${
 					tripStatus === 'tracking'
@@ -2339,9 +2976,9 @@
 
 								{#if mobileRouteBanner}
 									<div
-										class={`mt-3 line-clamp-2 rounded-[18px] border px-3.5 py-2.5 text-[12px] leading-5 shadow-[0_10px_24px_rgba(15,23,42,0.04)] ${getMobileRouteBannerClass(mobileRouteBanner.tone)}`}
+										class={`mt-3 line-clamp-2 rounded-[18px] border px-3.5 py-2.5 text-[12px] leading-5 shadow-[0_10px_24px_rgba(15,23,42,0.04)] ${getMobileRouteBannerClass(mobileRouteBanner?.tone ?? 'error')}`}
 									>
-										{mobileRouteBanner.message}
+										{mobileRouteBanner?.message}
 									</div>
 								{/if}
 							</div>
@@ -2939,15 +3576,7 @@
 			</div>
 		{/if}
 
-		<div
-			class={`pointer-events-none absolute inset-x-0 bottom-0 z-30 px-3 pb-3 sm:px-2 sm:pb-3 ${
-				activeTab === 'route' && tripStatus === 'tracking'
-					? 'hidden'
-					: activeTab === 'route' && showRouteHud
-						? 'hidden sm:block'
-						: ''
-			}`}
-		>
+		<div class="pointer-events-none absolute inset-x-0 bottom-0 z-30 px-3 pb-3 sm:px-2 sm:pb-3">
 			<div
 				class="mx-auto flex max-w-[1440px] flex-col items-center gap-3 sm:mx-0 sm:max-w-none lg:items-start"
 			>
@@ -2956,9 +3585,10 @@
 				>
 					<div class="grid grid-cols-3 gap-1">
 						{#each dockItems as item (item.id)}
-							<a
-								href={resolve(item.href)}
+							<button
+								type="button"
 								aria-current={activeTab === item.id ? 'page' : undefined}
+								onclick={() => void handleTabNavigation(item.href)}
 								class={`flex items-center justify-center gap-2 rounded-[22px] px-4 py-3 text-sm font-medium ${
 									activeTab === item.id
 										? 'bg-[#f3f4f6] text-[var(--text)]'
@@ -3005,13 +3635,13 @@
 									</svg>
 								{/if}
 								{item.label}
-							</a>
+							</button>
 						{/each}
 					</div>
 				</div>
 
 				{#if activeTab === 'route'}
-					<div class="pointer-events-auto w-full max-w-[420px]">
+					<div class="pointer-events-auto hidden w-full max-w-[420px]">
 						{#if routeSheetOpen || tripStatus === 'tracking'}
 							<div
 								class="overflow-hidden rounded-[34px] border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] shadow-[var(--shadow-float)]"
@@ -3208,7 +3838,8 @@
 										<div
 											class="rounded-[22px] border border-[var(--border)] bg-[var(--surface)] px-4 py-4 text-sm text-[var(--muted)]"
 										>
-											Loading traffic-aware routes for {routeDestination.label}.
+											Loading traffic-aware routes for {routeDestination?.label ??
+												'your destination'}.
 										</div>
 									{:else if routeOptions.length === 0}
 										<div
