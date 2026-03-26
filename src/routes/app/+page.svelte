@@ -1122,6 +1122,14 @@
 
 		void submitIncident(selectedType);
 	};
+	const handleTripReportAction = async () => {
+		if (currentLocation) {
+			setReportLocation(currentLocation, 'gps');
+		}
+
+		reportSheetState = 'full';
+		await goto(resolve('/app?tab=pulse'));
+	};
 
 	const pickReportLocationFromMap = (point: GeoPoint) => {
 		setReportLocation(point, 'pin');
@@ -2023,7 +2031,7 @@
 										{#if tripStatus === 'tracking'}
 											<button
 												type="button"
-												onclick={() => setMobileRouteSheetState('full')}
+												onclick={() => void handleTripReportAction()}
 												class="rounded-[22px] border border-black/8 bg-white px-4 py-2.5 text-[0.82rem] font-semibold text-[var(--muted)]"
 											>
 												Report
