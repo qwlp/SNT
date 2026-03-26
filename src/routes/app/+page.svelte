@@ -637,7 +637,7 @@
 		`${weatherTargetLocation.lat.toFixed(2)},${weatherTargetLocation.lng.toFixed(2)}`
 	);
 	const reportSheetHeightClass = $derived.by(() => {
-		if (reportSheetState === 'full') return 'h-[72svh] sm:h-[76svh]';
+		if (reportSheetState === 'full') return 'h-[78svh] sm:h-[76svh]';
 		if (reportSheetState === 'half') return 'h-[28svh] sm:h-[300px]';
 		return 'h-[88px]';
 	});
@@ -1131,9 +1131,6 @@
 		}
 
 		reportSheetState = 'collapsed';
-	};
-	const setReportSheetState = (next: ReportSheetState) => {
-		reportSheetState = next;
 	};
 	const toggleActiveDrawer = () => {
 		if (activeTab === 'pulse') {
@@ -3633,7 +3630,11 @@
 			</div>
 		{/if}
 
-		<div class="pointer-events-none absolute inset-x-0 bottom-0 z-30 px-3 pb-3 sm:px-2 sm:pb-3">
+		<div
+			class={`pointer-events-none absolute inset-x-0 bottom-0 z-30 px-3 sm:px-2 ${
+				activeTab === 'pulse' ? 'pb-0' : 'pb-3 sm:pb-3'
+			}`}
+		>
 			<div
 				class="mx-auto flex max-w-[1440px] flex-col items-center gap-3 sm:mx-0 sm:max-w-none lg:items-start"
 			>
@@ -4146,7 +4147,9 @@
 							} ${activeTab === 'pulse' ? '' : 'bg-[rgba(248,248,246,0.98)]'}`}
 						>
 							{#if activeTab === 'pulse'}
-								<div class="px-0 pt-3 pb-[calc(env(safe-area-inset-bottom,0px)+10px)]">
+								<div
+									class="px-0 pt-2 pb-[calc(env(safe-area-inset-bottom,0px)+8px)] sm:pt-3 sm:pb-[calc(env(safe-area-inset-bottom,0px)+10px)]"
+								>
 									{#if reportError}
 										<div
 											class="mb-3 rounded-[16px] border border-[#f1b7a4] bg-[#fff0eb] px-3 py-2 text-xs font-medium text-[#7d2c1d]"
@@ -4164,13 +4167,13 @@
 									{/if}
 
 									{#if reportSheetState !== 'collapsed'}
-										<div class="space-y-3">
+										<div class="space-y-2.5 sm:space-y-3">
 											<div
-												class="rounded-[24px] bg-[#f3f4f6] px-4 py-4 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.05)]"
+												class="rounded-[22px] bg-[#f3f4f6] px-3 py-3 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.05)] sm:rounded-[24px] sm:px-4 sm:py-4"
 											>
 												<div class="flex items-center gap-3">
 													<div
-														class={`flex h-12 w-12 shrink-0 items-center justify-center rounded-[18px] ${
+														class={`flex h-10 w-10 shrink-0 items-center justify-center rounded-[16px] sm:h-12 sm:w-12 sm:rounded-[18px] ${
 															weather?.tone === 'storm' || weather?.tone === 'rain'
 																? 'bg-[#fff1d6] text-[#8a5a00]'
 																: 'bg-white text-[#4b5563]'
@@ -4245,15 +4248,17 @@
 															{weather?.headline ??
 																(weatherLoading ? 'Loading local weather' : 'Weather unavailable')}
 														</p>
-														<p class="mt-1 truncate text-xs text-[#6b7280]">
+														<p class="truncate text-xs text-[#6b7280]">
 															{weather?.conditionLabel ??
 																(weatherLoading ? 'Checking conditions' : 'Stand by')}
 														</p>
 													</div>
 												</div>
 
-												<div class="mt-3 grid grid-cols-3 gap-2">
-													<div class="rounded-[18px] bg-white px-3 py-2.5">
+												<div class="mt-2.5 grid grid-cols-3 gap-2">
+													<div
+														class="rounded-[16px] bg-white px-2.5 py-2 sm:rounded-[18px] sm:px-3 sm:py-2.5"
+													>
 														<p class="text-[10px] tracking-[0.18em] text-[#9ca3af] uppercase">
 															Temp
 														</p>
@@ -4261,7 +4266,9 @@
 															{weather ? formatTemperature(weather.temperatureC) : '--'}
 														</p>
 													</div>
-													<div class="rounded-[18px] bg-white px-3 py-2.5">
+													<div
+														class="rounded-[16px] bg-white px-2.5 py-2 sm:rounded-[18px] sm:px-3 sm:py-2.5"
+													>
 														<p class="text-[10px] tracking-[0.18em] text-[#9ca3af] uppercase">
 															Rain
 														</p>
@@ -4269,7 +4276,9 @@
 															{weather ? `${weather.precipitationChancePercent}%` : '--'}
 														</p>
 													</div>
-													<div class="rounded-[18px] bg-white px-3 py-2.5">
+													<div
+														class="rounded-[16px] bg-white px-2.5 py-2 sm:rounded-[18px] sm:px-3 sm:py-2.5"
+													>
 														<p class="text-[10px] tracking-[0.18em] text-[#9ca3af] uppercase">
 															Wind
 														</p>
@@ -4280,7 +4289,7 @@
 												</div>
 
 												{#if reportSheetState === 'full'}
-													<p class="mt-3 text-sm leading-5 text-[#6b7280]">
+													<p class="mt-2 hidden text-sm leading-5 text-[#6b7280] sm:block">
 														{weatherError
 															? weatherError
 															: (weather?.recommendation ??
@@ -4289,7 +4298,7 @@
 												{/if}
 											</div>
 
-											<div class="grid grid-cols-2 gap-3 sm:grid-cols-3">
+											<div class="grid grid-cols-3 gap-2 sm:grid-cols-3 sm:gap-3">
 												{#each INCIDENT_TYPES as incidentType (incidentType)}
 													<button
 														type="button"
@@ -4297,28 +4306,33 @@
 														title={REPORT_TYPE_LABELS[incidentType]}
 														onclick={() => {
 															selectedType = incidentType;
-															if (reportSheetState === 'half') {
-																void submitIncident(incidentType);
-															}
+															void submitIncident(incidentType);
 														}}
 														disabled={reportSubmitting}
-														class={`rounded-[22px] border px-4 py-4 text-left shadow-[0_8px_24px_rgba(15,23,42,0.06)] transition ${
+														class={`rounded-[20px] border px-2.5 py-3 text-center shadow-[0_8px_20px_rgba(15,23,42,0.05)] transition sm:rounded-[22px] sm:px-4 sm:py-4 sm:text-left sm:shadow-[0_8px_24px_rgba(15,23,42,0.06)] ${
 															selectedType === incidentType
 																? 'border-[#d97706]/25 bg-[#fff8eb]'
 																: 'border-black/6 bg-[#f3f4f6] hover:bg-[#eceef1]'
 														} disabled:opacity-50`}
 													>
-														<div class="flex items-center gap-3">
+														<div
+															class="flex flex-col items-center gap-2 sm:flex-row sm:items-center sm:gap-3"
+														>
 															<div
-																class="flex h-11 w-11 shrink-0 items-center justify-center rounded-[16px] bg-white"
+																class="flex h-10 w-10 shrink-0 items-center justify-center rounded-[14px] bg-white sm:h-11 sm:w-11 sm:rounded-[16px]"
 															>
-																<IncidentTypeIcon type={incidentType} class="h-6 w-6" />
+																<IncidentTypeIcon
+																	type={incidentType}
+																	class="h-5 w-5 sm:h-6 sm:w-6"
+																/>
 															</div>
 															<div class="min-w-0">
-																<p class="text-sm font-semibold text-[#111827]">
+																<p
+																	class="truncate text-[13px] font-semibold text-[#111827] sm:text-sm"
+																>
 																	{REPORT_TYPE_LABELS[incidentType]}
 																</p>
-																<p class="mt-0.5 text-xs text-[#6b7280]">
+																<p class="mt-0.5 hidden text-xs text-[#6b7280] sm:block">
 																	{INCIDENT_LABELS[incidentType].en}
 																</p>
 															</div>
@@ -4328,70 +4342,9 @@
 											</div>
 
 											{#if reportSheetState === 'full'}
-												<div class="space-y-3">
+												<div class="space-y-2.5 sm:space-y-3">
 													<div
-														class="rounded-[24px] bg-[#f3f4f6] px-4 py-4 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.05)]"
-													>
-														<div class="flex items-start justify-between gap-3">
-															<div>
-																<p class="text-sm font-semibold text-[#111827]">Report details</p>
-																<p class="mt-1 text-xs text-[#6b7280]">
-																	Add context and choose where this report should be pinned.
-																</p>
-															</div>
-															<div class="flex gap-2">
-																<button
-																	type="button"
-																	onclick={() => {
-																		if (currentLocation) setReportLocation(currentLocation, 'gps');
-																	}}
-																	class="rounded-full bg-white px-3 py-1.5 text-xs font-medium text-[#4b5563]"
-																>
-																	Use GPS
-																</button>
-																<button
-																	type="button"
-																	onclick={() => setReportSheetState('half')}
-																	class="rounded-full bg-white px-3 py-1.5 text-xs font-medium text-[#4b5563]"
-																>
-																	Quick mode
-																</button>
-															</div>
-														</div>
-														<div
-															class="mt-3 rounded-[18px] bg-white px-3 py-2.5 text-xs text-[#6b7280]"
-														>
-															{reportLocation
-																? `Pinned at ${formatPointLabel(reportLocation)}`
-																: currentLocation
-																	? 'Using live GPS if you submit now.'
-																	: 'Wait for GPS or double-click the map to drop a pin.'}
-														</div>
-														<label class="mt-3 block">
-															<span class="text-[10px] tracking-[0.18em] text-[#9ca3af] uppercase"
-																>Note</span
-															>
-															<textarea
-																rows="3"
-																bind:value={reportNote}
-																placeholder="What is happening here?"
-																class="mt-2 w-full rounded-[18px] border border-black/6 bg-white px-3 py-3 text-sm text-[#111827] outline-none placeholder:text-[#9ca3af]"
-															></textarea>
-														</label>
-														<button
-															type="button"
-															onclick={() => void submitIncident(selectedType)}
-															disabled={reportSubmitting}
-															class="mt-3 w-full rounded-[20px] bg-[#d97706] px-4 py-3 text-sm font-semibold text-white disabled:bg-[var(--surface-muted)] disabled:text-[var(--muted)]"
-														>
-															{reportSubmitting
-																? 'Sending report...'
-																: `Submit ${REPORT_TYPE_LABELS[selectedType]}`}
-														</button>
-													</div>
-
-													<div
-														class="rounded-[24px] bg-[#f3f4f6] px-4 py-4 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.05)]"
+														class="hidden rounded-[24px] bg-[#f3f4f6] px-4 py-4 shadow-[inset_0_0_0_1px_rgba(15,23,42,0.05)] sm:block"
 													>
 														<div class="flex items-center justify-between gap-3">
 															<div>
